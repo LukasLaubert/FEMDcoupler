@@ -40,7 +40,7 @@ The primary workflow is managed by the main run scripts, which execute a sequenc
 All model parameters are defined within the `ParamConfig` class in the **`FEMDcoupler_params.py`** file. Before running the workflow, modify this file to define your desired model.
 
 Key configurable aspects include:
-- FE and MD domain geometry (rectangular or circular).
+- FE domain geometry (rectangular or circular).
 - Meshing and cell set parameters, as well as bridging region thickness.
 - Cut and notch parameters for fracture studies.
 - Anchor atom placement probability.
