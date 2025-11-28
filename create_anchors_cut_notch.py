@@ -40,6 +40,7 @@ truncate_chains = params['truncate_chains']
 remove_bridge_interactions = params['remove_bridge_interactions']
 
 md_remove_shape = params['md_remove_shape']
+remove_molecules_threshold = params.get('remove_molecules_threshold')
 
 cut_thickness = params['cut_thickness']
 cut_shift = params['cut_shift']
@@ -750,6 +751,90 @@ def run_anchor_cut_process():
                 print("No atoms found in bridge region. No interactions removed.")
         else:
             print("remove_bridge_interactions is False. Skipping bridge interaction removal.")
+
+        # Topology-based small molecule/fragment cleanup
+        if remove_molecules_threshold is not None and remove_molecules_threshold > 0:
+            print("Running topology-based small molecule cleanup (threshold: {} atoms)...".format(remove_molecules_threshold))
+            
+            # 0. Preparation for Bridge Protection: If bridge interactions were removed, atoms there are artificially isolated. We must NOT delete them.
+            atom_id_map = {a['id']: a for a in parsed_data['atoms']}
+            bridge_regions_cleanup = []
+            if remove_bridge_interactions:
+                bridge_regions_cleanup = _determine_anchor_regions(parsed_data['box_dims'], domain_min_coords, domain_max_coords, bridge_thickness, tol)
+
+            # 1. Build Adjacency Graph from currently surviving bonds
+            adj = {atom['id']: set() for atom in parsed_data['atoms']}
+            if 'bonds' in parsed_data:
+                for b in parsed_data['bonds']:
+                    a1, a2 = b[2], b[3]
+                    if a1 in adj and a2 in adj:
+                        adj[a1].add(a2); adj[a2].add(a1)
+            
+            # 2. Find Connected Components (Fragments) via BFS
+            visited = set()
+            atoms_to_delete_topo = set()
+            stats_pruned_topo = {} 
+            
+            sorted_atom_ids = sorted(adj.keys())
+            
+            for aid in sorted_atom_ids:
+                if aid not in visited:
+                    component = []
+                    q = [aid]; visited.add(aid)
+                    # Breadth-First Search
+                    idx = 0
+                    while idx < len(q):
+                        curr = q[idx]; idx += 1
+                        component.append(curr)
+                        for nbr in adj[curr]:
+                            if nbr not in visited:
+                                visited.add(nbr); q.append(nbr)
+                    
+                    # 3. Check Size and Determine Deletion
+                    size = len(component)
+                    if size <= remove_molecules_threshold:
+                        delete_component = True
+                        
+                        # PROTECTION CHECK: If remove_bridge_interactions is ON, do not delete fragments located in the bridge.
+                        if remove_bridge_interactions:
+                            for comp_atom_id in component:
+                                atom_obj = atom_id_map.get(comp_atom_id)
+                                if atom_obj and _is_atom_in_anchor_regions(atom_obj, bridge_regions_cleanup, tol):
+                                    delete_component = False
+                                    break 
+                        
+                        if delete_component:
+                            for comp_atom_id in component: atoms_to_delete_topo.add(comp_atom_id)
+                            stats_pruned_topo[size] = stats_pruned_topo.get(size, 0) + 1
+
+            # 4. Remove Atoms and Interactions if needed
+            if atoms_to_delete_topo:
+                # Update atoms list
+                parsed_data['atoms'] = [atom for atom in parsed_data['atoms'] if atom['id'] not in atoms_to_delete_topo]
+                
+                # Resequence Atom IDs 
+                topo_old_to_new_map = _resequence_atom_ids_and_update_parts(parsed_data['atoms'], parsed_data['atom_style_info'])
+                
+                # Update Velocities
+                if parsed_data.get('velocities'):
+                    parsed_data['velocities'] = _filter_and_resequence_velocities(
+                        parsed_data['velocities'], atoms_to_delete_topo, topo_old_to_new_map
+                    )
+
+                # Update Interactions
+                for spec in interaction_specs:
+                    key = spec['key']
+                    if parsed_data.get(key):
+                        kept = _filter_interactions(parsed_data[key], atoms_to_delete_topo, spec['atom_indices'])
+                        _update_interaction_atom_ids(kept, topo_old_to_new_map, spec['atom_indices'])
+                        _resequence_interaction_ids(kept)
+                        parsed_data[key] = kept
+
+                # Summary Output
+                details_parts = ["{} molecules of size {}".format(count, size) for size, count in sorted(stats_pruned_topo.items())]
+                print("  -> Deleted: {}. Total atoms removed: {}.".format(", ".join(details_parts), len(atoms_to_delete_topo)))
+            else:
+                print("  -> No molecules or fragments found below threshold.")
 
         if dpd_thickness is not None and dpd_thickness > 0:
             print("dpd_thickness is active. Re-typing atoms in boundary regions.")

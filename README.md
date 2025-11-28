@@ -16,6 +16,7 @@ The workflow is orchestrated through a series of Python scripts that use Abaqus 
     - **Anchor Atoms**: Probabilistically places anchor atoms in the bridging region between the FE and MD domains to facilitate coupling.
     - **Interaction Management**: Can automatically remove interactions at the boundary of the bridging region to avoid interactions between particles at non-periodic boundaries.
     - **Chain Truncation**: Optional truncation of molecular chains at the FE-MD boundary to ensure clean coupling interfaces.
+    - **Molecule Cleanup**: Automated removal of molecules or fragments whose atom count is at or below a defined threshold, regardless of their origin (pre-existing or formed by other operations like cuts/notches/truncation).
     - **DPD Support**: Capabilities to re-type atoms near non-periodic boundaries, facilitating Dissipative Particle Dynamics (DPD) setups.
 - **Configuration**: A centralized Python configuration file (`FEMDcoupler_params.py`) allows for customization of the model, from geometry and mesh size to pre-crack parameters. This script generates a JSON configuration file used by the subsequent pipeline.
 
