@@ -1,21 +1,23 @@
 # FEMDcoupler
 
-FEMDcoupler is a robust pre-processing toolkit designed to automate the generation of coupled Finite Element (FE) and Molecular Dynamics (MD) models. It streamlines the creation of simulation-ready systems by integrating an MD core with a surrounding FE domain, including support for features like pre-cracks and periodic boundaries.
+FEMDcoupler is a pre-processing toolkit for generating coupled Finite Element (FE) and Molecular Dynamics (MD) models. It creates simulation-ready systems by integrating an MD core with a surrounding FE domain, supporting features like pre-cracks and periodic boundaries.
 
-The workflow is orchestrated through a series of Python scripts that leverage Abaqus for FE mesh generation and perform data manipulation on LAMMPS data files.
+The workflow is orchestrated through a series of Python scripts that use Abaqus for FE mesh generation and perform data manipulation on LAMMPS data files.
 
 ## Features
 
-- **FE & MD Model Generation**: Automatically prepares 3D models with a central MD region integrated into a surrounding FE continuum based on a single LAMMPS data file. Supports both rectangular and cylindrical FE domains.
-- **Meshing**: Generates a 3D hexahedral mesh. The mesh density is configurable and automatically adapted to the geometry.
-- **Fracture Mechanics**: Easily introduce pre-cracks into the model.
+- **FE & MD Model Generation**: Prepares 3D models with a central MD region integrated into a surrounding FE continuum based on a single LAMMPS data file. Supports both rectangular and cylindrical FE domains.
+- **Meshing**: Generates a 3D hexahedral mesh. The mesh density is configurable and adapts to the geometry specified and given by the LAMMPS data file.
+- **Fracture Mechanics**: Optionally introduces pre-cracks into the model.
     - **Notches**: Create notches with configurable thickness, depth, and orientation.
     - **Cutouts**: Insert elliptical or cuboid cutouts, either as a cavity/void or a groove through the entire model.
-- **Periodic Boundary Support**: Post-processes the Abaqus-generated mesh to ensure perfect node-for-node periodicity, which is crucial for applying periodic Dirichlet boundary conditions (dPBCs).
+- **Periodic Boundary Support**: Post-processes the Abaqus-generated mesh to ensure node-for-node periodicity, which allows for applying periodic Dirichlet boundary conditions (dPBCs).
 - **FE-MD Interface Handling**:
     - **Anchor Atoms**: Probabilistically places anchor atoms in the bridging region between the FE and MD domains to facilitate coupling.
     - **Interaction Management**: Can automatically remove interactions at the boundary of the bridging region to avoid interactions between particles at non-periodic boundaries.
-- **Flexible Configuration**: A centralized Python configuration file (`FEMDcoupler_params.py`) allows for detailed customization of the model, from geometry and mesh size to pre-crack parameters.
+    - **Chain Truncation**: Optional truncation of molecular chains at the FE-MD boundary to ensure clean coupling interfaces.
+    - **DPD Support**: Capabilities to re-type atoms near non-periodic boundaries, facilitating Dissipative Particle Dynamics (DPD) setups.
+- **Configuration**: A centralized Python configuration file (`FEMDcoupler_params.py`) allows for customization of the model, from geometry and mesh size to pre-crack parameters. This script generates a JSON configuration file used by the subsequent pipeline.
 
 ## Software Requirements
 
@@ -67,7 +69,7 @@ Running these scripts will initiate the full pre-processing pipeline, culminatin
 
 - **Abaqus GUI Interaction**:
     - When the `create_part_mesh.py` script is executed, it will launch Abaqus/CAE. You can make arbitrary changes to the model within the GUI at this stage.
-    - To ensure your changes are used, you must save the model by overwriting the `.inp` file that the script generates. This file is then used by subsequent scripts.
+    - To ensure your changes are recognized by subsequently executed scripts, you must save the model by overwriting the already generated `.inp` file. To do so, expand `Jobs` in the `Analysis` section on the Model Worktree (click `+` left of it) > right click the only existing job listed there > `Write Input` > `OK` > `Yes`.
     - If no changes are made, saving is not required, as the script handles file generation automatically. Abaqus may be closed without saving.
 
 - **Abaqus Version Incompatibilities**: `create_part_mesh.py` is written in Python 2.7, which is only compatible with Abaqus/CAE 2023 or older. For running it in Abaqus CAE 2024 or newer, please refer to this guide: https://tecnodigitalschool.com/upgrade-from-python2-to-python3-abaqus-2024/

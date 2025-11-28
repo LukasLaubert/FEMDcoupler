@@ -22,6 +22,8 @@ with open(config_filename, 'r') as f:
 
 domain_min_coords = params['domain_min_coords']
 domain_max_coords = params['domain_max_coords']
+circular_burrito_radius = params.get('circular_burrito_radius')
+pbc_direction = params.get('pbc_direction')
 bridge_thickness = params['bridge_thickness']
 default_mesh_size = params['default_mesh_size']
 
@@ -627,6 +629,7 @@ def _write_modified_lammps_file(output_filepath, parsed_data,
 # Main data modification logic
 # ==============================================================================
 def run_anchor_cut_process():
+    global domain_min_coords, domain_max_coords # Allow modification of globals
     print("="*70); print(" LAMMPS Data Modification Script ".center(70, "=")); print("="*70)
     script_dir = os.getcwd()
     try:
@@ -638,6 +641,35 @@ def run_anchor_cut_process():
         if not parsed_data['atoms']:
             raise ValueError("No atom data parsed from LAMMPS file.")
         
+        if circular_burrito_radius is not None:
+            print("INFO: Cylindrical 'burrito' mode detected. Recalculating domain center based on LAMMPS box.")
+            if pbc_direction not in [1, 2, 3]: 
+                raise ValueError("pbc_direction must be 1 (x), 2 (y), or 3 (z).")
+            axes = ['x', 'y', 'z']
+            pbc_axis = axes[pbc_direction - 1]
+            non_pbc_axes = [axis for axis in axes if axis != pbc_axis]
+
+            # In burrito mode, PBC axis bounds are None (periodic)
+            # Non-PBC axes are centered on the MD box
+            
+            # Update the global coordinate lists (mutable lists)
+            # Index map: x=0, y=1, z=2
+            pbc_idx = pbc_direction - 1
+            domain_min_coords[pbc_idx] = None
+            domain_max_coords[pbc_idx] = None
+            
+            for axis in non_pbc_axes:
+                ax_idx = {'x':0, 'y':1, 'z':2}[axis]
+                l_min = parsed_data['box_dims'][axis][0]
+                l_max = parsed_data['box_dims'][axis][1]
+                center = (l_min + l_max) / 2.0
+                
+                domain_min_coords[ax_idx] = center - circular_burrito_radius
+                domain_max_coords[ax_idx] = center + circular_burrito_radius
+                
+            print("  Updated domain_min_coords: {}".format(domain_min_coords))
+            print("  Updated domain_max_coords: {}".format(domain_max_coords))
+
         print("Initial atoms: {}, bonds: {}, angles: {}, dihedrals: {}, impropers: {}".format(
             len(parsed_data['atoms']), len(parsed_data['bonds']), len(parsed_data.get('angles',[])),
             len(parsed_data.get('dihedrals',[])), len(parsed_data.get('impropers',[]))

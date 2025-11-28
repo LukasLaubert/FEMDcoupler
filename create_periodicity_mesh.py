@@ -552,7 +552,7 @@ if __name__ == "__main__":
     for path in set(['.', output_dir or '.']):
         if os.path.isdir(path):
             for f in os.listdir(path):
-                if f.endswith(('.pyc', '.jnl', '.exception')) or 'abaqus.rpy' in f:
+                if f.endswith(('.pyc', '.jnl', '.exception', 'abaqus_acis.log')) or 'abaqus.rpy' in f:
                     try: os.remove(os.path.join(path, f))
                     except OSError: pass
                         

@@ -376,24 +376,46 @@ def create_partitioned_part(model_obj, part_name_str, overall_bounds_dict, physi
         print "  Creating cylindrical part base (radius={:.4f}).".format(circular_burrito_radius)
         axes_map = {1: ('x', YZPLANE, YAXIS), 2: ('y', XZPLANE, ZAXIS), 3: ('z', XYPLANE, YAXIS)}
         pbc_ax_char, sketch_plane, sketch_up_axis = axes_map[pbc_direction]
-        non_pbc_axes = [ax for ax in ['x', 'y', 'z'] if ax != pbc_ax_char]
-
+        
         pbc_ax_min = overall_bounds_dict[pbc_ax_char + '_min']
         extrusion_depth = overall_bounds_dict[pbc_ax_char + '_max'] - pbc_ax_min
         if extrusion_depth < tol_geom: raise ValueError("Cylindrical extrusion depth ({:.4f}) too small.".format(extrusion_depth))
 
-        center_1 = (overall_bounds_dict[non_pbc_axes[0] + '_min'] + overall_bounds_dict[non_pbc_axes[0] + '_max']) / 2.0
-        center_2 = (overall_bounds_dict[non_pbc_axes[1] + '_min'] + overall_bounds_dict[non_pbc_axes[1] + '_max']) / 2.0
+        # Calculate explicit global center coordinates
+        cx = (overall_bounds_dict['x_min'] + overall_bounds_dict['x_max']) / 2.0
+        cy = (overall_bounds_dict['y_min'] + overall_bounds_dict['y_max']) / 2.0
+        cz = (overall_bounds_dict['z_min'] + overall_bounds_dict['z_max']) / 2.0
 
-        origin, sketch_center = (0,0,0), (0,0)
-        if pbc_direction == 1: origin, sketch_center = (pbc_ax_min, 0, 0), (center_1, center_2)
-        elif pbc_direction == 2: origin, sketch_center = (0, pbc_ax_min, 0), (center_1, center_2)
-        elif pbc_direction == 3: origin, sketch_center = (0, 0, pbc_ax_min), (center_1, center_2)
+        # Determine sketch origin and center based on PBC direction mapping
+        origin = (0, 0, 0)
+        sketch_center = (0, 0)
+
+        if pbc_direction == 1: # X-axis cylinder (Plane YZ, Up Y)
+            # YZ Plane: Normal +X. Up +Y. Right is -Z.
+            # Local X (Right) -> Global -Z
+            # Local Y (Up)    -> Global Y
+            origin = (pbc_ax_min, 0, 0)
+            sketch_center = (-cz, cy) 
+        elif pbc_direction == 2: # Y-axis cylinder (Plane XZ, Up Z)
+            # XZ Plane: Normal +Y. Up +Z. Right is -X.
+            # Local X (Right) -> Global -X
+            # Local Y (Up)    -> Global Z
+            origin = (0, pbc_ax_min, 0)
+            sketch_center = (-cx, cz)
+        elif pbc_direction == 3: # Z-axis cylinder (Plane XY, Up Y)
+            # XY Plane: Normal +Z. Up +Y. Right is +X.
+            # Local X (Right) -> Global X
+            # Local Y (Up)    -> Global Y
+            origin = (0, 0, pbc_ax_min)
+            sketch_center = (cx, cy)
 
         temp_plane = part_obj.DatumPlaneByPrincipalPlane(principalPlane=sketch_plane, offset=pbc_ax_min)
         temp_axis = part_obj.DatumAxisByPrincipalAxis(principalAxis=sketch_up_axis)
+        
+        # Note: Using RIGHT orientation assumes standard Abaqus plane conventions
         transform = part_obj.MakeSketchTransform(sketchPlane=part_obj.datums[temp_plane.id], sketchUpEdge=part_obj.datums[temp_axis.id],
                                                  sketchPlaneSide=SIDE1, sketchOrientation=RIGHT, origin=origin)
+                                                 
         sketch_name = '{}_profile'.format(part_name_str)
         if sketch_name in model_obj.sketches: del model_obj.sketches[sketch_name]
         s = model_obj.ConstrainedSketch(name=sketch_name, sheetSize=max(extrusion_depth, circular_burrito_radius*2.5), transform=transform)
@@ -498,10 +520,8 @@ def is_centroid_in_notch_region(cx, cy, cz, overall_bounds, n_thick_val, n_norma
     part_min_p, part_max_p = overall_bounds[plane_ax_char+'_min'], overall_bounds[plane_ax_char+'_max']
     surface_coord = part_max_p if is_plane_pos_side else part_min_p
 
-    actual_depth = abs(part_max_p - part_min_p) / 2.0
-    if n_depth_user_val is not None:
-        actual_depth = abs(n_depth_user_val)
-        if actual_depth > abs(part_max_p - part_min_p) - tol_c : actual_depth = abs(part_max_p - part_min_p)
+    actual_depth = abs(part_max_p - part_min_p) / 2.0 if n_depth_user_val is None else abs(n_depth_user_val)
+    if actual_depth > abs(part_max_p - part_min_p) - tol_c : actual_depth = abs(part_max_p - part_min_p)
 
     depth_limit_coord = surface_coord - actual_depth if is_plane_pos_side else surface_coord + actual_depth
 
@@ -604,6 +624,9 @@ def create_bd_element_set(part_obj, lammps_original_box_bounds, tol_set):
     if 'FE' not in part_obj.sets or not part_obj.sets['FE'].elements:
         print "  'FE' set has no elements. Cannot create 'BD' set."
         return
+    
+    # Use a relaxed tolerance for this check to handle floating point issues at boundaries
+    relaxed_tol = 1e-3
         
     l_xlo, l_xhi = lammps_original_box_bounds['xlo'], lammps_original_box_bounds['xhi']
     l_ylo, l_yhi = lammps_original_box_bounds['ylo'], lammps_original_box_bounds['yhi']
@@ -622,9 +645,9 @@ def create_bd_element_set(part_obj, lammps_original_box_bounds, tol_set):
         else:
             for node in nodes:
                 nx, ny, nz = node.coordinates
-                if not (l_xlo - tol_set <= nx <= l_xhi + tol_set and
-                        l_ylo - tol_set <= ny <= l_yhi + tol_set and
-                        l_zlo - tol_set <= nz <= l_zhi + tol_set):
+                if not (l_xlo - relaxed_tol <= nx <= l_xhi + relaxed_tol and
+                        l_ylo - relaxed_tol <= ny <= l_yhi + relaxed_tol and
+                        l_zlo - relaxed_tol <= nz <= l_zhi + relaxed_tol):
                     is_fully_covered = False
                     break
         
@@ -885,11 +908,23 @@ def run_meshing_process():
 
     script_dir = os.getcwd()
     try:
-        base_name_for_objects = os.path.basename(output_file)
+        data_file, _ = find_lammps_data_file(script_dir, lammps_file)
+        data_file = os.path.abspath(data_file)
+
+        output_file_abs = os.path.abspath(output_file)
+        output_dir = os.path.dirname(output_file_abs)
+        base_name_for_objects = os.path.basename(output_file_abs)
+
+        if output_dir and not os.path.exists(output_dir):
+            print "Creating output directory: {}".format(output_dir)
+            os.makedirs(output_dir)
+        
+        if output_dir:
+            print "Changing Abaqus working directory to: {}".format(output_dir)
+            os.chdir(output_dir)
+
         model_name, part_name, job_name, abq_step_name = base_name_for_objects, base_name_for_objects, base_name_for_objects, base_name_for_objects
         
-        data_file, _ = find_lammps_data_file(script_dir, lammps_file)
-
         if model_name not in mdb.models: myModel = mdb.Model(name=model_name)
         else:
             myModel = mdb.models[model_name]
@@ -936,17 +971,13 @@ def run_meshing_process():
                 print "\nCreating Job: '{}'...".format(job_name)
                 mdb.Job(name=job_name, model=model_name, type=ANALYSIS, nodalOutputPrecision=FULL, numCpus=1)
                 print "  Job '{}' created.".format(job_name)
-                mdb.jobs[job_name].writeInput(consistencyChecking=OFF); print "  Input file '{}.inp' written.".format(job_name)
-                source_inp_path = os.path.join(script_dir, job_name + '.inp')
-                destination_inp_path = os.path.splitext(output_file)[0] + '.inp'
-                output_dir = os.path.dirname(destination_inp_path)
-                if output_dir and not os.path.exists(output_dir): os.makedirs(output_dir)
-                shutil.move(source_inp_path, destination_inp_path)
-                print "  Input file moved to '{}'.".format(destination_inp_path)
+                mdb.jobs[job_name].writeInput(consistencyChecking=OFF)
+                print "  Input file '{}.inp' written to {}.".format(job_name, os.getcwd())
 
                 if myModel:
-                    cae_file_path = output_file + ".cae"
-                    mdb.saveAs(pathName=cae_file_path)
+                    cae_file_name = base_name_for_objects + ".cae"
+                    mdb.saveAs(pathName=cae_file_name)
+                    print "  CAE file saved as '{}' in {}.".format(cae_file_name, os.getcwd())
 
                 print "\nUpdating viewport..."
                 if session.viewports:

@@ -119,10 +119,11 @@ def _parse_lammps_data(filepath):
 
 # --- FE Mesh Data Extraction ---
 def _parse_inp_file(filepath):
-    """Robustly parse .inp file for nodes, elements, and element sets."""
+    """Robustly parse .inp file for nodes, elements, and element sets, including generate."""
     nodes, elements, elsets = {}, {}, {}
     in_node_section, in_element_section, in_elset_section = False, False, False
     current_elset_name = None
+    elset_generate_mode = False
 
     with open(filepath, 'r') as f:
         for line in f:
@@ -140,25 +141,46 @@ def _parse_inp_file(filepath):
                     in_element_section = True
                 elif lowered_line.startswith('*elset'):
                     in_elset_section = True
+                    # Check for generate parameter
+                    elset_generate_mode = 'generate' in lowered_line
+                    
                     match = re.search(r'elset=([^,]+)', stripped, re.IGNORECASE)
                     if match:
                         current_elset_name = match.group(1).strip()
-                        elsets[current_elset_name] = set()
+                        if current_elset_name not in elsets:
+                            elsets[current_elset_name] = set()
                     else:
                         current_elset_name = None
                 continue
             
             if in_node_section:
                 parts = [p.strip() for p in stripped.split(',')]
-                nodes[int(parts[0])] = [float(p) for p in parts[1:4]]
+                try:
+                    nodes[int(parts[0])] = [float(p) for p in parts[1:4]]
+                except ValueError:
+                    pass
             elif in_element_section:
                 parts = [p.strip() for p in stripped.split(',')]
-                elem_id = int(parts[0])
-                elem_nodes = [int(p) for p in parts[1:]]
-                elem_type = 'C3D8' if len(elem_nodes) == 8 else 'C3D4' if len(elem_nodes) == 4 else 'C3D6' if len(elem_nodes) == 6 else None
-                elements[elem_id] = {'type': elem_type, 'nodes': elem_nodes}
+                try:
+                    elem_id = int(parts[0])
+                    elem_nodes = [int(p) for p in parts[1:] if p]
+                    elem_type = 'C3D8' if len(elem_nodes) == 8 else 'C3D4' if len(elem_nodes) == 4 else 'C3D6' if len(elem_nodes) == 6 else None
+                    elements[elem_id] = {'type': elem_type, 'nodes': elem_nodes}
+                except ValueError:
+                    pass
             elif in_elset_section and current_elset_name:
-                elsets[current_elset_name].update(int(p.strip()) for p in stripped.split(',') if p.strip().isdigit())
+                parts = [p.strip() for p in stripped.split(',') if p.strip()]
+                if elset_generate_mode:
+                    # Syntax: start, end, increment
+                    if len(parts) == 3:
+                        try:
+                            start, end, inc = int(parts[0]), int(parts[1]), int(parts[2])
+                            elsets[current_elset_name].update(range(start, end + 1, inc))
+                        except ValueError:
+                            pass
+                else:
+                    # Standard list of IDs
+                    elsets[current_elset_name].update(int(p) for p in parts if p.isdigit())
                 
     return nodes, elements, elsets
 
@@ -182,8 +204,11 @@ def _extract_fe_mesh_data(all_nodes, all_elements, all_sets, cellset_names):
         connectivity = EDGE_CONNECTIVITY.get(element['type'])
         if connectivity:
             for i, j in connectivity:
-                n1, n2 = element['nodes'][i], element['nodes'][j]
-                fe_edges.add(tuple(sorted((n1, n2))))
+                try:
+                    n1, n2 = element['nodes'][i], element['nodes'][j]
+                    fe_edges.add(tuple(sorted((n1, n2))))
+                except IndexError:
+                    pass
     
     return sorted(list(fe_nodes)), sorted(list(fe_edges))
 
