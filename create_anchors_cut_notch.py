@@ -42,10 +42,10 @@ remove_bridge_interactions = params['remove_bridge_interactions']
 md_remove_shape = params['md_remove_shape']
 remove_molecules_threshold = params.get('remove_molecules_threshold')
 
-cut_thickness = params['cut_thickness']
+cut_width = params['cut_width']
 cut_shift = params['cut_shift']
 
-notch_thickness = params['notch_thickness']
+notch_width = params['notch_width']
 notch_normal = params['notch_normal']
 notch_plane = params['notch_plane']
 notch_shift = params['notch_shift']
@@ -230,8 +230,8 @@ def _is_close_custom(a, b, rel_tol=1e-9, abs_tol=0.0): # Custom isclose for Pyth
     return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 
 def _identify_atoms_for_removal(atoms_list, overall_md_bounds, lammps_data_box_dims,
-                                in_cut_thickness, in_cut_shift,
-                                in_notch_thickness, in_notch_normal, in_notch_plane,
+                                in_cut_width, in_cut_shift,
+                                in_notch_width, in_notch_normal, in_notch_plane,
                                 in_notch_shift, in_notch_depth,
                                 remove_shape, tol_val):
     atom_ids_to_delete = set()
@@ -242,11 +242,11 @@ def _identify_atoms_for_removal(atoms_list, overall_md_bounds, lammps_data_box_d
     num_active_cut_dims = 0
     cut_params_by_dim = {}
 
-    if any(ct is not None for ct in in_cut_thickness):
+    if any(ct is not None for ct in in_cut_width):
         for i_ax in range(3):
-            if in_cut_thickness[i_ax] is not None:
+            if in_cut_width[i_ax] is not None:
                 num_active_cut_dims += 1
-                ct_val = abs(in_cut_thickness[i_ax])
+                ct_val = abs(in_cut_width[i_ax])
                 if ct_val < tol_val: ct_val = tol_val
                 cs_val = in_cut_shift[i_ax] if in_cut_shift[i_ax] is not None else 0.0
                 axis_char = axes_map[i_ax]
@@ -260,9 +260,9 @@ def _identify_atoms_for_removal(atoms_list, overall_md_bounds, lammps_data_box_d
             print("INFO: Cut defined in only 1D. MD atoms will not be removed for this cut.")
 
     is_notch_active_for_md = False
-    if in_notch_thickness is not None:
+    if in_notch_width is not None:
         is_notch_active_for_md = True
-        nt_val = abs(in_notch_thickness)
+        nt_val = abs(in_notch_width)
         if nt_val < tol_val: nt_val = tol_val
         
         nn_idx = in_notch_normal - 1
@@ -679,8 +679,8 @@ def run_anchor_cut_process():
         overall_md_bounds = _calculate_overall_md_bounds(parsed_data['box_dims'], domain_min_coords, domain_max_coords, tol)
         atom_ids_to_delete = _identify_atoms_for_removal(
             parsed_data['atoms'], overall_md_bounds, parsed_data['box_dims'],
-            cut_thickness, cut_shift,
-            notch_thickness, notch_normal, notch_plane, notch_shift, notch_depth,
+            cut_width, cut_shift,
+            notch_width, notch_normal, notch_plane, notch_shift, notch_depth,
             md_remove_shape, tol
         )
         if atom_ids_to_delete:

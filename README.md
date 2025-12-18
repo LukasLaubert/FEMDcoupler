@@ -9,8 +9,8 @@ The workflow is orchestrated through a series of Python scripts that use Abaqus 
 - **FE & MD Model Generation**: Prepares 3D models with a central MD region integrated into a surrounding FE continuum based on a single LAMMPS data file. Supports both rectangular and cylindrical FE domains.
 - **Meshing**: Generates a 3D hexahedral mesh. The mesh density is configurable and adapts to the geometry specified and given by the LAMMPS data file.
 - **Fracture Mechanics**: Optionally introduces pre-cracks into the model.
-    - **Notches**: Create notches with configurable thickness, depth, and orientation.
-    - **Cutouts**: Insert elliptical or cuboid cutouts, either as a cavity/void or a groove through the entire model.
+    - **Notches**: Create notches starting from the outer surface/edge with configurable width, depth, and orientation.
+    - **Cutouts**: Insert internal voids or channels (elliptical or cuboid) through the entire model.
 - **Periodic Boundary Support**: Post-processes the Abaqus-generated mesh to ensure node-for-node periodicity, which allows for applying periodic Dirichlet boundary conditions (dPBCs).
 - **FE-MD Interface Handling**:
     - **Anchor Atoms**: Probabilistically places anchor atoms in the bridging region between the FE and MD domains to facilitate coupling.
@@ -23,12 +23,13 @@ The workflow is orchestrated through a series of Python scripts that use Abaqus 
 ## Software Requirements
 
 - **Abaqus/CAE** (2023 or older): Required for FE part creation and meshing. The scripts are designed to interface with the Abaqus Python environment.
+    - *Note:* The **Abaqus Learning Edition** (Student Version) is fully sufficient for using this toolkit as node limitations of the Learning Edition only apply to solving analysis jobs, not to generating the model files and meshes used here.
 - **Python 3.x**: A standard Python 3 interpreter is needed to run the data processing and orchestration scripts.
 
 ## Installation
 
 1.  Clone or download the repository to your local machine.
-2.  Ensure that the `abaqus` command is available in your system's PATH.
+2.  Ensure that the `abaqus` command is available in your system's PATH. Alternatively, you can specify the full path to the Abaqus executable directly inside the `FEMDcoupler_run.sh` (Linux/macOS) or `FEMDcoupler_run.bat` (Windows) file.
 3.  On Linux/macOS, make the shell script executable before the first run:
     ```bash
     chmod +x FEMDcoupler_run.sh
@@ -70,14 +71,18 @@ Running these scripts will initiate the full pre-processing pipeline, culminatin
 
 - **Abaqus GUI Interaction**:
     - When the `create_part_mesh.py` script is executed, it will launch Abaqus/CAE. You can make arbitrary changes to the model within the GUI at this stage.
+    - **Note for Linux Users**: In some Linux environments, the script might not execute automatically once the GUI opens. If the model is not generated automatically, inside Abaqus go to `File > Run Script...` and select `create_part_mesh.py` manually.
     - To ensure your changes are recognized by subsequently executed scripts, you must save the model by overwriting the already generated `.inp` file. To do so, expand `Jobs` in the `Analysis` section on the Model Worktree (click `+` left of it) > right click the only existing job listed there > `Write Input` > `OK` > `Yes`.
     - If no changes are made, saving is not required, as the script handles file generation automatically. Abaqus may be closed without saving.
 
+- **Subsequent overwriting of .inp file and using periodic Dirichlet boundary conditions**:
+    - If you overwrite the generated `.inp` file with Abaqus Job writing *after* the automated workflow has finished, it is recommended to manually rerun `create_periodicity_mesh.py`. This ensures that minor mesh irregularities introduced by the Abaqus mesher by saving/overwriting the .inp file are corrected. This is only relevant if you aim to use periodic Dirichlet boundary conditions in your following simulation.
+
 - **Abaqus Version Incompatibilities**: `create_part_mesh.py` is written in Python 2.7, which is only compatible with Abaqus/CAE 2023 or older. For running it in Abaqus CAE 2024 or newer, please refer to this guide: https://tecnodigitalschool.com/upgrade-from-python2-to-python3-abaqus-2024/
 
-- **Remote/Headless Abaqus**:
-    - **X2Go Rendering Issues**: If running Abaqus/CAE via a remote desktop solution like X2Go, you may encounter rendering problems. To resolve this, add the ` -mesa` flag after `abaqus cae` in the `FEMDcoupler_run.sh` for starting Abaqus. If the mesh generation script is then not executed automatically, execute it manually via `File > Run script... > create_part_mesh.py` inside the GUI.
-    - **Headless Mode**: To prevent the Abaqus GUI from starting altogether (e.g. if no manual changes to the FE mesh and its sets are required), you can modify the run script. After the `abaqus cae` command, replace `script=` with `noGUI=`. This is significantly faster but removes the ability to interactively modify the FE model.
+- **Common Linux Issues**:
+    - **X2Go Rendering Issues**: If running Abaqus/CAE via a remote desktop solution like X2Go, you may encounter rendering problems. To resolve this, add the ` -mesa` flag after `abaqus cae` in the `FEMDcoupler_run.sh` for starting Abaqus.
+    - **Headless Mode (recommended)**: To prevent the Abaqus GUI from starting altogether (e.g. to avoid graphics driver issues), you can modify the run script `FEMDcoupler_run.sh` as follows: After the `abaqus cae` command, replace `script=` with `noGUI=`. This is significantly faster and **ensures the script executes automatically**, whereas the GUI mode (`script=`) on Linux often requires triggering the script manually (see section **Abaqus GUI Interaction**). However, this removes the ability to interactively modify the FE model within the scope of the automated workflow. If the FE model/.inp file is modified later using Abaqus, please see section **Subsequent overwriting of .inp file and using periodic Dirichlet boundary conditions**.
 
 ## Workflow Overview
 

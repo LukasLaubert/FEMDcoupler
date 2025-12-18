@@ -72,10 +72,10 @@ truncate_chains = params['truncate_chains']
 
 md_remove_shape = params['md_remove_shape']
 
-cut_thickness = params['cut_thickness']
+cut_width = params['cut_width']
 cut_shift = params['cut_shift']
 
-notch_thickness = params['notch_thickness']
+notch_width = params['notch_width']
 notch_normal = params['notch_normal']
 notch_plane = params['notch_plane']
 notch_shift = params['notch_shift']
@@ -145,8 +145,8 @@ def parse_lammps_data(file_path):
     return box_bounds
 
 def calculate_dimensions(lammps_original_box_bounds, domain_min_user, domain_max_user, buffer_val, tol_calc, full_elem_bridge_flag,
-                         in_cut_thickness, in_cut_shift,
-                         in_notch_thickness, in_notch_normal, in_notch_plane, in_notch_shift, in_notch_depth,
+                         in_cut_width, in_cut_shift,
+                         in_notch_width, in_notch_normal, in_notch_plane, in_notch_shift, in_notch_depth,
                          padding_flag, padding_thickness):
     print "\nCalculating Part Dimensions and Partitions (full_elem_bridge={}, have_padding={})...".format(full_elem_bridge_flag, padding_flag)
     overall_part_bounds = {}
@@ -240,14 +240,14 @@ def calculate_dimensions(lammps_original_box_bounds, domain_min_user, domain_max
                     if is_new_coord: current_phys_partitions.append(l_box_max)
         physical_partition_coords[axis].extend(current_phys_partitions)
 
-    is_cut_active = any(ct is not None for ct in in_cut_thickness)
-    is_notch_active = in_notch_thickness is not None
+    is_cut_active = any(ct is not None for ct in in_cut_width)
+    is_notch_active = in_notch_width is not None
 
     if is_cut_active:
         print "  Adding cut partitions to physical_partition_coords..."
         for i_axis, axis_char_loop in enumerate(['x', 'y', 'z']):
-            if in_cut_thickness[i_axis] is not None:
-                ct_val = abs(in_cut_thickness[i_axis])
+            if in_cut_width[i_axis] is not None:
+                ct_val = abs(in_cut_width[i_axis])
                 if ct_val < tol_calc: ct_val = tol_calc
 
                 cs_val = in_cut_shift[i_axis] if in_cut_shift[i_axis] is not None else 0.0
@@ -266,7 +266,7 @@ def calculate_dimensions(lammps_original_box_bounds, domain_min_user, domain_max
 
     if is_notch_active:
         print "  Adding notch partitions to physical_partition_coords..."
-        n_thick_val = abs(in_notch_thickness)
+        n_thick_val = abs(in_notch_width)
         if n_thick_val < tol_calc: n_thick_val = tol_calc
         n_normal_idx = in_notch_normal - 1
         n_plane_param = in_notch_plane
@@ -532,7 +532,7 @@ def is_centroid_in_notch_region(cx, cy, cz, overall_bounds, n_thick_val, n_norma
 
     return True
 
-def create_part_geometry_sets(part_obj, md_iface_bounds, physical_partition_coords_dict, tol_set, bridge_cellset_flag, lammps_original_box_bounds_for_sets, overall_part_bounds_for_empty_check,in_cut_thickness, in_cut_shift, in_notch_thickness, in_notch_normal, in_notch_plane, in_notch_shift, in_notch_depth, padding_flag, boun_set_bounds):
+def create_part_geometry_sets(part_obj, md_iface_bounds, physical_partition_coords_dict, tol_set, bridge_cellset_flag, lammps_original_box_bounds_for_sets, overall_part_bounds_for_empty_check,in_cut_width, in_cut_shift, in_notch_width, in_notch_normal, in_notch_plane, in_notch_shift, in_notch_depth, padding_flag, boun_set_bounds):
     print "\nCreating Part Cell Sets (EMPTY, MD, FE, PAD if applicable) for '{}'...".format(part_obj.name)
     md_xlo, md_xhi = md_iface_bounds['xlo'], md_iface_bounds['xhi']
     md_ylo, md_yhi = md_iface_bounds['ylo'], md_iface_bounds['yhi']
@@ -543,8 +543,8 @@ def create_part_geometry_sets(part_obj, md_iface_bounds, physical_partition_coor
     if not part_obj.cells:
         print "  ERROR: Part '{}' has no cells for set creation.".format(part_obj.name); return
 
-    is_cut_globally_active = any(ct is not None for ct in in_cut_thickness)
-    is_notch_globally_active = in_notch_thickness is not None
+    is_cut_globally_active = any(ct is not None for ct in in_cut_width)
+    is_notch_globally_active = in_notch_width is not None
     user_min_map = {'x': domain_min_coords[0], 'y': domain_min_coords[1], 'z': domain_min_coords[2]}
     user_max_map = {'x': domain_max_coords[0], 'y': domain_max_coords[1], 'z': domain_max_coords[2]}
     
@@ -561,10 +561,10 @@ def create_part_geometry_sets(part_obj, md_iface_bounds, physical_partition_coor
         # 1. Check for EMPTY cells (cuts/notches) first.
         is_empty = False
         if is_cut_globally_active:
-            if is_centroid_in_cut_region(cx, cy, cz, overall_part_bounds_for_empty_check, in_cut_thickness, in_cut_shift, tol_set):
+            if is_centroid_in_cut_region(cx, cy, cz, overall_part_bounds_for_empty_check, in_cut_width, in_cut_shift, tol_set):
                 is_empty = True
         if not is_empty and is_notch_globally_active:
-            if is_centroid_in_notch_region(cx, cy, cz, overall_part_bounds_for_empty_check, in_notch_thickness, in_notch_normal-1, in_notch_plane, in_notch_shift, in_notch_depth, tol_set):
+            if is_centroid_in_notch_region(cx, cy, cz, overall_part_bounds_for_empty_check, in_notch_width, in_notch_normal-1, in_notch_plane, in_notch_shift, in_notch_depth, tol_set):
                 is_empty = True
         if is_empty:
             empty_cells.append(cell_to_classify)
@@ -934,7 +934,7 @@ def run_meshing_process():
         lammps_box_orig = parse_lammps_data(data_file)
         overall_part_bounds, physical_partition_coords, md_interface_bounds, boun_set_bounds = calculate_dimensions(
             lammps_box_orig, domain_min_coords, domain_max_coords, bridge_thickness, tol, full_elem_bridge,
-            cut_thickness, cut_shift, notch_thickness, notch_normal, notch_plane, notch_shift, notch_depth,
+            cut_width, cut_shift, notch_width, notch_normal, notch_plane, notch_shift, notch_depth,
             have_padding, default_mesh_size
         )
         myPart = create_partitioned_part(myModel, part_name, overall_part_bounds, physical_partition_coords, tol)
@@ -942,7 +942,7 @@ def run_meshing_process():
         if myPart:
             create_part_geometry_sets(myPart, md_interface_bounds, physical_partition_coords, tol, bridge_cellset, lammps_box_orig,
                                       overall_part_bounds,
-                                      cut_thickness, cut_shift, notch_thickness, notch_normal, notch_plane, notch_shift, notch_depth,
+                                      cut_width, cut_shift, notch_width, notch_normal, notch_plane, notch_shift, notch_depth,
                                       have_padding, boun_set_bounds)
             create_part_outer_boundary_sets(myPart, overall_part_bounds, boun_set_bounds, tol)
 
