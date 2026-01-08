@@ -619,61 +619,50 @@ def create_part_geometry_sets(part_obj, md_iface_bounds, physical_partition_coor
     else: print "  No cells classified as PAD."
 
 def create_bd_element_set(part_obj, lammps_original_box_bounds, tol_set):
-    """Creates a BD element set by finding all elements fully inside the LAMMPS box."""
-    print "\nCreating 'BD' element set based on 'fully covered' elements..."
-    if 'FE' not in part_obj.sets or not part_obj.sets['FE'].elements:
-        print "  'FE' set has no elements. Cannot create 'BD' set."
+    """Creates a BD cell set by finding all cells fully inside the LAMMPS box."""
+    print "\nCreating 'BD' cell set based on 'fully covered' cells..."
+    if 'FE' not in part_obj.sets or not part_obj.sets['FE'].cells:
+        print "  'FE' set has no cells. Cannot create 'BD' set."
         return
     
-    # Use a relaxed tolerance for this check to handle floating point issues at boundaries
-    relaxed_tol = 1e-3
-        
     l_xlo, l_xhi = lammps_original_box_bounds['xlo'], lammps_original_box_bounds['xhi']
     l_ylo, l_yhi = lammps_original_box_bounds['ylo'], lammps_original_box_bounds['yhi']
     l_zlo, l_zhi = lammps_original_box_bounds['zlo'], lammps_original_box_bounds['zhi']
     
-    bd_element_labels = []
-    fe_element_labels = []
+    bd_cells = []
+    fe_cells = []
     
-    all_fe_elements = part_obj.sets['FE'].elements
+    # Iterate over Cells to create Geometry Sets (which auto-generate Node Sets)
+    all_fe_cells = part_obj.sets['FE'].cells
     
-    for elem in all_fe_elements:
-        is_fully_covered = True
-        nodes = elem.getNodes()
-        if not nodes:
-            is_fully_covered = False
-        else:
-            for node in nodes:
-                nx, ny, nz = node.coordinates
-                if not (l_xlo - relaxed_tol <= nx <= l_xhi + relaxed_tol and
-                        l_ylo - relaxed_tol <= ny <= l_yhi + relaxed_tol and
-                        l_zlo - relaxed_tol <= nz <= l_zhi + relaxed_tol):
-                    is_fully_covered = False
-                    break
+    for cell in all_fe_cells:
+        # Check geometric inclusion using the cell's representative point
+        p = cell.pointOn[0]
+        nx, ny, nz = p[0], p[1], p[2]
         
-        if is_fully_covered:
-            bd_element_labels.append(elem.label)
+        if (l_xlo - tol_set <= nx <= l_xhi + tol_set and
+            l_ylo - tol_set <= ny <= l_yhi + tol_set and
+            l_zlo - tol_set <= nz <= l_zhi + tol_set):
+            bd_cells.append(cell)
         else:
-            fe_element_labels.append(elem.label)
+            fe_cells.append(cell)
             
-    # Create new BD element set
-    if bd_element_labels:
-        bd_elements = part_obj.elements.sequenceFromLabels(labels=bd_element_labels)
-        part_obj.Set(elements=bd_elements, name='BD')
-        print "  Created 'BD' element set with {} fully covered elements.".format(len(bd_elements))
+    # Create new BD cell set
+    if bd_cells:
+        part_obj.Set(cells=part_module.CellArray(cells=bd_cells), name='BD')
+        print "  Created 'BD' cell set with {} cells.".format(len(bd_cells))
     else:
-        print "  No fully covered elements found to create 'BD' set."
+        print "  No fully covered cells found to create 'BD' set."
 
-    # Overwrite the old FE cell set with a new, smaller FE element set
+    # Overwrite the old FE set with new FE cell set
     if 'FE' in part_obj.sets:
         del part_obj.sets['FE']
         
-    if fe_element_labels:
-        fe_elements = part_obj.elements.sequenceFromLabels(labels=fe_element_labels)
-        part_obj.Set(elements=fe_elements, name='FE')
-        print "  Recreated 'FE' element set with remaining {} elements.".format(len(fe_elements))
+    if fe_cells:
+        part_obj.Set(cells=part_module.CellArray(cells=fe_cells), name='FE')
+        print "  Recreated 'FE' cell set with remaining {} cells.".format(len(fe_cells))
     else:
-        print "  No remaining elements for the 'FE' set."
+        print "  No remaining cells for the 'FE' set."
 
 
 def create_part_outer_boundary_sets(part_obj, overall_bounds_part, boun_set_bounds, tol_boun):
