@@ -666,6 +666,42 @@ def create_bd_element_set(part_obj, lammps_original_box_bounds, tol_set):
 
 
 def create_part_outer_boundary_sets(part_obj, overall_bounds_part, boun_set_bounds, tol_boun):
+    # Pre-compute PAD cell indices for fast filtering
+    pad_cell_indices = set()
+    if 'PAD' in part_obj.sets:
+        for c in part_obj.sets['PAD'].cells:
+            pad_cell_indices.add(c.index)
+    
+    has_pad = len(pad_cell_indices) > 0
+
+    # Helper function to filter out faces belonging ONLY to PAD cells
+    def get_filtered_faces(faces_sequence):
+        if not has_pad or not faces_sequence:
+            return faces_sequence
+        
+        filtered_list = []
+        for face in faces_sequence:
+            # getCells() returns a tuple of INTEGER indices, not Cell objects
+            owners = face.getCells()
+            if not owners: continue
+            
+            # Check if ALL owners are PAD cells.
+            # If at least one owner is NOT a PAD cell (e.g. FE or MD), we keep the face.
+            all_owners_are_pad = True
+            for cell_idx in owners:
+                if cell_idx not in pad_cell_indices:
+                    all_owners_are_pad = False
+                    break
+            
+            # Only keep the face if it interacts with a non-PAD cell
+            if not all_owners_are_pad:
+                filtered_list.append(face)
+        
+        # Return a FaceArray if we filtered, otherwise the original sequence
+        if len(filtered_list) == len(faces_sequence):
+            return faces_sequence
+        return part_module.FaceArray(faces=filtered_list)
+
     if circular_burrito_radius is not None:
         print "\nCreating Part Outer Boundary Face Sets (Cylindrical) for '{}'...".format(part_obj.name)
         if not part_obj.faces: print "  ERROR: Part '{}' has no faces.".format(part_obj.name); return
@@ -679,21 +715,23 @@ def create_part_outer_boundary_sets(part_obj, overall_bounds_part, boun_set_boun
         pbc_ax_min_boun, pbc_ax_max_boun = boun_set_bounds[pbc_axis_char + '_min'], boun_set_bounds[pbc_axis_char + '_max']
         min_faces = part_obj.faces.getByBoundingBox(**{pbc_axis_char+'Min': pbc_ax_min_boun - tol_boun, pbc_axis_char+'Max': pbc_ax_min_boun + tol_boun})
         max_faces = part_obj.faces.getByBoundingBox(**{pbc_axis_char+'Min': pbc_ax_max_boun - tol_boun, pbc_axis_char+'Max': pbc_ax_max_boun + tol_boun})
+        
+        min_faces = get_filtered_faces(min_faces)
+        max_faces = get_filtered_faces(max_faces)
+
         min_set_name, max_set_name = 'BOUN_' + pbc_axis_char + 'lo', 'BOUN_' + pbc_axis_char + 'hi'
 
-        if min_faces:
+        if len(min_faces) > 0:
             part_obj.Set(faces=min_faces, name=min_set_name)
             print "  Created Part set '{}' ({} faces)".format(min_set_name, len(min_faces))
         else:
-            print "  WARNING: No faces for Part set '{}'. Creating empty.".format(min_set_name)
-            part_obj.Set(faces=part_module.FaceArray(faces=[]), name=min_set_name)
+            print "  WARNING: No faces for Part set '{}' (possibly due to PAD exclusion). Skipping creation.".format(min_set_name)
         
-        if max_faces:
+        if len(max_faces) > 0:
             part_obj.Set(faces=max_faces, name=max_set_name)
             print "  Created Part set '{}' ({} faces)".format(max_set_name, len(max_faces))
         else:
-            print "  WARNING: No faces for Part set '{}'. Creating empty.".format(max_set_name)
-            part_obj.Set(faces=part_module.FaceArray(faces=[]), name=max_set_name)
+            print "  WARNING: No faces for Part set '{}' (possibly due to PAD exclusion). Skipping creation.".format(max_set_name)
     else:
         print "\nCreating Part Outer Boundary Face Sets (BOUN_...) for '{}'...".format(part_obj.name)
         if not part_obj.faces: print "  ERROR: Part '{}' has no faces.".format(part_obj.name); return
@@ -726,12 +764,13 @@ def create_part_outer_boundary_sets(part_obj, overall_bounds_part, boun_set_boun
                                                               xMin=x_min_search-tol_boun, xMax=x_max_search+tol_boun,
                                                               yMin=y_min_search-tol_boun, yMax=y_max_search+tol_boun)
 
+            faces_found = get_filtered_faces(faces_found)
+
             if faces_found and len(faces_found) > 0:
                 part_obj.Set(faces=faces_found, name=set_name)
                 print "  Created Part set '{}' ({} faces)".format(set_name, len(faces_found))
             else:
-                print "  WARNING: No faces for Part set '{}'. Creating empty.".format(set_name)
-                part_obj.Set(faces=part_module.FaceArray(faces=[]), name=set_name)
+                print "  WARNING: No faces for Part set '{}' (possibly due to PAD exclusion). Skipping creation.".format(set_name)
 
 
 def assign_mesh_controls_and_generate(part_obj, mesh_size_global, bridge_cellset_flag, mesh_md_region_flag, mesh_cutout_region_flag):
