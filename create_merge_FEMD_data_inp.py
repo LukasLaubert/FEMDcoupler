@@ -313,12 +313,15 @@ def run_femd_merger():
         new_atoms, new_velocities, new_bonds = [], [], []
         fe_node_id_to_new_atom_id = {}
         
+        has_original_velocities = bool(lammps_data.velocities)
+
         for i, fe_node_id in enumerate(fe_nodes):
             new_atom_id = max_atom_id + i + 1
             fe_node_id_to_new_atom_id[fe_node_id] = new_atom_id
             coords = all_nodes[fe_node_id]
             new_atoms.append(_create_fe_atom_line(new_atom_id, fe_atom_type, coords, lammps_data.atom_style_info, template_parts))
-            new_velocities.append("{} 0.0 0.0 0.0".format(new_atom_id))
+            if has_original_velocities:
+                new_velocities.append("{} 0.0 0.0 0.0".format(new_atom_id))
 
         for i, edge in enumerate(fe_edges):
             new_bond_id = max_bond_id + i + 1

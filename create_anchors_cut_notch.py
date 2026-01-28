@@ -35,6 +35,7 @@ tol = params['tol']
 
 dpd_thickness = params['dpd_thickness']
 anchor_placement_probability = params['anchor_placement_probability']
+anchor_symmetric_correction = params['anchor_symmetric_correction']
 ANCHOR_ATOM_MASS_VAL = params['ANCHOR_ATOM_MASS_VAL']
 truncate_chains = params['truncate_chains']
 remove_bridge_interactions = params['remove_bridge_interactions']
@@ -627,6 +628,187 @@ def _write_modified_lammps_file(output_filepath, parsed_data,
             _write_section_if_present(f, sec_name, parsed_data)
 
 # ==============================================================================
+# Anchor Symmetry Balancing Logic
+# ==============================================================================
+def _get_atom_region_signature(atom_coords, box_dims, bridge_thick, tol_val, active_sides_map):
+    """
+    Returns a tuple (sig_x, sig_y, sig_z) representing the region.
+    -1: Lower Bridge, 0: Bulk/Middle, 1: Upper Bridge.
+    
+    Evaluates each axis INDEPENDENTLY. 
+    - If a side is active (FE boundary) and atom is in range, sig is +/-1.
+    - If a side is inactive (PBC), sig is forced to 0.
+    
+    Result:
+    - 1 non-zero: Face (e.g. (-1, 0, 0))
+    - 2 non-zeros: Edge (e.g. (-1, 0, -1))
+    - 3 non-zeros: Corner (e.g. (-1, -1, -1))
+    """
+    sig = [0, 0, 0]
+    axes_keys = ['x', 'y', 'z']
+    
+    for i, axis in enumerate(axes_keys):
+        lo, hi = box_dims[axis][0], box_dims[axis][1]
+        val = atom_coords[i]
+        
+        # Check Lower Bridge (only if this specific side has a bridge)
+        if active_sides_map[i]['min'] and val <= lo + bridge_thick + tol_val:
+            sig[i] = -1
+        # Check Upper Bridge (only if this specific side has a bridge)
+        elif active_sides_map[i]['max'] and val >= hi - bridge_thick - tol_val:
+            sig[i] = 1
+        # Else remains 0 (Middle or Inactive/PBC boundary)
+        
+    return tuple(sig)
+
+def _perform_symmetric_anchor_correction(new_anchors_list, box_dims, bridge_thick, 
+                                         d_min_coords, d_max_coords, tol_val):
+    """
+    Balances anchors across symmetric regions (Corners, Edges, Faces).
+    Returns: (set_of_indices_to_remove, report_string)
+    """
+    import collections
+    
+    # 1. Determine Active Sides based on user domain config
+    active_sides_map = {}
+    for i in range(3):
+        active_sides_map[i] = {
+            'min': d_min_coords[i] is not None,
+            'max': d_max_coords[i] is not None
+        }
+
+    # 2. Bin Anchors
+    anchors_by_sig = collections.defaultdict(list)
+    total_anchors_classified = 0
+    
+    for idx, anchor in enumerate(new_anchors_list):
+        coords = [anchor['x'], anchor['y'], anchor['z']]
+        # Pass active_sides_map to ensure signatures reflect configuration (PBC vs Bridge)
+        sig = _get_atom_region_signature(coords, box_dims, bridge_thick, tol_val, active_sides_map)
+        anchors_by_sig[sig].append(idx)
+        total_anchors_classified += 1
+        
+    # 3. Calculate Volumes (theoretical volumes for reporting)
+    vol_map = _calculate_region_volumes(box_dims, bridge_thick, active_sides_map)
+    
+    # 4. Group by Symmetry
+    indices_to_remove = set()
+    symmetry_groups = collections.defaultdict(set)
+    
+    # Generate all theoretical signatures (-1, 0, 1) and group them
+    for sx in [-1, 0, 1]:
+        for sy in [-1, 0, 1]:
+            for sz in [-1, 0, 1]:
+                # Validate if this signature is possible given the active bridges
+                is_active = True
+                if sx == -1 and not active_sides_map[0]['min']: is_active = False
+                if sx == 1 and not active_sides_map[0]['max']: is_active = False
+                if sy == -1 and not active_sides_map[1]['min']: is_active = False
+                if sy == 1 and not active_sides_map[1]['max']: is_active = False
+                if sz == -1 and not active_sides_map[2]['min']: is_active = False
+                if sz == 1 and not active_sides_map[2]['max']: is_active = False
+                
+                # Exclude pure bulk (0,0,0) from symmetry balancing
+                if is_active and (sx != 0 or sy != 0 or sz != 0):
+                    abs_key = (abs(sx), abs(sy), abs(sz))
+                    symmetry_groups[abs_key].add((sx, sy, sz))
+
+    # 5. Prune and Report
+    report_lines = [] # Header handled by calling function
+    anchors_in_groups = 0
+    
+    for abs_key, sigs_in_group in symmetry_groups.items():
+        if not sigs_in_group: continue
+        
+        # Collect counts
+        counts = {}
+        for sig in sigs_in_group:
+            counts[sig] = len(anchors_by_sig[sig])
+            anchors_in_groups += counts[sig]
+            
+        # The target is the minimum count found in any of the symmetric regions
+        target_count = min(counts.values())
+        
+        # Header for the group
+        group_type = "Face"
+        non_zeros = sum(1 for k in abs_key if k != 0)
+        if non_zeros == 2: group_type = "Edge"
+        if non_zeros == 3: group_type = "Corner"
+        
+        report_lines.append("  Group {} {}: Target Count = {}".format(group_type, abs_key, target_count))
+        
+        # Process each region in the group
+        for sig in sorted(sigs_in_group):
+            current_count = counts[sig]
+            num_pruned = 0
+            
+            if current_count > target_count:
+                num_pruned = current_count - target_count
+                candidates = anchors_by_sig[sig]
+                # Randomly select victims to prune
+                selected_indices = random.sample(candidates, num_pruned)
+                indices_to_remove.update(selected_indices)
+            
+            final_count = current_count - num_pruned
+            vol_str = "{:.1f}".format(vol_map.get(sig, 0.0))
+            
+            if num_pruned > 0:
+                report_lines.append("    Region {:12}: {} anchors [-{} pruned] (Vol: {})".format(
+                    str(sig), final_count, num_pruned, vol_str))
+            else:
+                report_lines.append("    Region {:12}: {} anchors (Vol: {})".format(
+                    str(sig), final_count, vol_str))
+
+    unclassified = total_anchors_classified - anchors_in_groups
+    total_pruned = len(indices_to_remove)
+    report_lines.append("  Summary: {} total anchors processed. {} in symmetry groups. {} unclassified/bulk. {} pruned to restore symmetry.".format(
+        total_anchors_classified, anchors_in_groups, unclassified, total_pruned))
+
+    return indices_to_remove, "\n".join(report_lines)
+
+def _calculate_region_volumes(box_dims, bridge_thick, active_sides_map):
+    """
+    Calculates theoretical volumes for region signatures based on active bridges.
+    active_sides_map: {0: {'min': bool, 'max': bool}, 1: ..., 2: ...}
+    Returns dict: { (sx, sy, sz): volume }
+    """
+    volumes = {}
+    
+    # Iterate all possible signatures (-1, 0, 1) for 3 dimensions
+    for sx in [-1, 0, 1]:
+        for sy in [-1, 0, 1]:
+            for sz in [-1, 0, 1]:
+                signature = (sx, sy, sz)
+                vol = 1.0
+                
+                # Check if this signature is theoretically possible/active
+                is_valid_sig = True
+                dims_lengths = []
+                
+                for i, s_comp in enumerate([sx, sy, sz]):
+                    axis_char = ['x', 'y', 'z'][i]
+                    box_len = box_dims[axis_char][1] - box_dims[axis_char][0]
+                    
+                    if s_comp == -1:
+                        if not active_sides_map[i]['min']: is_valid_sig = False
+                        dims_lengths.append(bridge_thick)
+                    elif s_comp == 1:
+                        if not active_sides_map[i]['max']: is_valid_sig = False
+                        dims_lengths.append(bridge_thick)
+                    else: # s_comp == 0
+                        # Middle length = Total - (Active Bridges)
+                        mid_len = box_len
+                        if active_sides_map[i]['min']: mid_len -= bridge_thick
+                        if active_sides_map[i]['max']: mid_len -= bridge_thick
+                        dims_lengths.append(max(0, mid_len))
+                
+                if is_valid_sig:
+                    vol = dims_lengths[0] * dims_lengths[1] * dims_lengths[2]
+                    volumes[signature] = vol
+                    
+    return volumes
+
+# ==============================================================================
 # Main data modification logic
 # ==============================================================================
 def run_anchor_cut_process():
@@ -687,7 +869,6 @@ def run_anchor_cut_process():
             print("Marked {} atoms for deletion due to cut/notch.".format(len(atom_ids_to_delete)))
 
         current_atoms = [atom for atom in parsed_data['atoms'] if atom['id'] not in atom_ids_to_delete]
-        old_to_new_atom_id_map = _resequence_atom_ids_and_update_parts(current_atoms, parsed_data['atom_style_info'])
         parsed_data['atoms'] = current_atoms
 
         interaction_specs = [
@@ -697,14 +878,14 @@ def run_anchor_cut_process():
             {'key': 'impropers', 'atom_indices': [2, 3, 4, 5]} 
         ]
         for spec in interaction_specs:
-            kept_interactions = _filter_interactions(parsed_data.get(spec['key'], []), atom_ids_to_delete, spec['atom_indices'])
-            _update_interaction_atom_ids(kept_interactions, old_to_new_atom_id_map, spec['atom_indices'])
-            _resequence_interaction_ids(kept_interactions)
-            parsed_data[spec['key']] = kept_interactions 
+            if parsed_data.get(spec['key']):
+                parsed_data[spec['key']] = _filter_interactions(
+                    parsed_data[spec['key']], atom_ids_to_delete, spec['atom_indices']
+                )
 
-        parsed_data['velocities'] = _filter_and_resequence_velocities(
-            parsed_data.get('velocities', []), atom_ids_to_delete, old_to_new_atom_id_map
-        )
+        if parsed_data.get('velocities'):
+            parsed_data['velocities'] = [v for v in parsed_data['velocities'] if v[0] not in atom_ids_to_delete]
+
         
         print("After cut/notch: atoms: {}, bonds: {}, angles: {}, dihedrals: {}, impropers: {}".format(
             len(parsed_data['atoms']), len(parsed_data['bonds']), len(parsed_data.get('angles',[])),
@@ -714,9 +895,6 @@ def run_anchor_cut_process():
         if truncate_chains:
             print("truncate_chains is True. Proceeding with interaction cutting across non-periodic boundaries.")
             _cut_long_bonds_in_non_periodic_dims(parsed_data, domain_min_coords, domain_max_coords)
-            for spec in interaction_specs:
-                if parsed_data.get(spec['key']):
-                    _resequence_interaction_ids(parsed_data[spec['key']])
         else:
             print("truncate_chains is False. Skipping interaction cutting.")
 
@@ -746,7 +924,6 @@ def run_anchor_cut_process():
                         print("  - {}: Removed {} of {} entries.".format(
                             key.capitalize(), original_count - len(kept_interactions), original_count))
                         parsed_data[key] = kept_interactions
-                        _resequence_interaction_ids(parsed_data[key])
             else:
                 print("No atoms found in bridge region. No interactions removed.")
         else:
@@ -812,29 +989,21 @@ def run_anchor_cut_process():
                 # Update atoms list
                 parsed_data['atoms'] = [atom for atom in parsed_data['atoms'] if atom['id'] not in atoms_to_delete_topo]
                 
-                # Resequence Atom IDs 
-                topo_old_to_new_map = _resequence_atom_ids_and_update_parts(parsed_data['atoms'], parsed_data['atom_style_info'])
-                
                 # Update Velocities
                 if parsed_data.get('velocities'):
-                    parsed_data['velocities'] = _filter_and_resequence_velocities(
-                        parsed_data['velocities'], atoms_to_delete_topo, topo_old_to_new_map
-                    )
+                    parsed_data['velocities'] = [v for v in parsed_data['velocities'] if v[0] not in atoms_to_delete_topo]
 
                 # Update Interactions
                 for spec in interaction_specs:
                     key = spec['key']
                     if parsed_data.get(key):
-                        kept = _filter_interactions(parsed_data[key], atoms_to_delete_topo, spec['atom_indices'])
-                        _update_interaction_atom_ids(kept, topo_old_to_new_map, spec['atom_indices'])
-                        _resequence_interaction_ids(kept)
-                        parsed_data[key] = kept
+                        parsed_data[key] = _filter_interactions(parsed_data[key], atoms_to_delete_topo, spec['atom_indices'])
 
                 # Summary Output
                 details_parts = ["{} molecules of size {}".format(count, size) for size, count in sorted(stats_pruned_topo.items())]
-                print("  -> Deleted: {}. Total atoms removed: {}.".format(", ".join(details_parts), len(atoms_to_delete_topo)))
+                print("  Deleted: {}. Total atoms removed: {}.".format(", ".join(details_parts), len(atoms_to_delete_topo)))
             else:
-                print("  -> No molecules or fragments found below threshold.")
+                print("  No molecules or fragments found below threshold.")
 
         if dpd_thickness is not None and dpd_thickness > 0:
             print("dpd_thickness is active. Re-typing atoms in boundary regions.")
@@ -938,7 +1107,8 @@ def run_anchor_cut_process():
 
         num_anchors_placed = 0
         newly_placed_anchor_data_for_vel = [] 
-
+        
+        # Updated anchor placement logic, considering symmetry correction
         for atom_obj in parsed_data['atoms']: 
             if _is_atom_in_anchor_regions(atom_obj, anchor_regions, tol):
                 if random.random() < anchor_placement_probability:
@@ -969,17 +1139,65 @@ def run_anchor_cut_process():
                     newly_placed_anchor_data_for_vel.append([current_anchor_atom_id_counter, 0, 0, 0])
                     current_anchor_atom_id_counter += 1; num_anchors_placed += 1
         
+        # ======================================================================
+        # SYMMETRIC ANCHOR CORRECTION
+        # ======================================================================
+        if anchor_symmetric_correction and num_anchors_placed > 0:
+            print("Applying symmetric anchor correction...")
+            indices_to_discard, correction_report = _perform_symmetric_anchor_correction(
+                new_anchor_atom_objects_for_struct,
+                parsed_data['box_dims'],
+                bridge_thickness,
+                domain_min_coords, 
+                domain_max_coords,
+                tol
+            )
+            
+            if indices_to_discard:
+                # Filter the lists based on indices
+                final_anchors = []
+                final_bonds = []
+                final_vels = []
+                
+                for i in range(len(new_anchor_atom_objects_for_struct)):
+                    if i not in indices_to_discard:
+                        final_anchors.append(new_anchor_atom_objects_for_struct[i])
+                        final_bonds.append(new_anchor_bonds_data_temp[i])
+                        final_vels.append(newly_placed_anchor_data_for_vel[i])
+                        
+                new_anchor_atom_objects_for_struct = final_anchors
+                new_anchor_bonds_data_temp = final_bonds
+                newly_placed_anchor_data_for_vel = final_vels
+                num_anchors_placed = len(new_anchor_atom_objects_for_struct)
+            
+            print(correction_report)
+        # ======================================================================
+        
         parsed_data['atoms'].extend(new_anchor_atom_objects_for_struct)
 
+        # Add the new anchor bonds (still using original/pre-resequence IDs)
         current_max_bond_id = max(b[0] for b in parsed_data['bonds']) if parsed_data['bonds'] else 0
         for anchor_bond_type_atoms in new_anchor_bonds_data_temp:
             current_max_bond_id += 1
             parsed_data['bonds'].append([current_max_bond_id] + anchor_bond_type_atoms)
         
-        if parsed_data.get('velocities') is not None or newly_placed_anchor_data_for_vel:
-             if 'velocities' not in parsed_data or parsed_data['velocities'] is None : parsed_data['velocities'] = []
+        # Merge velocities ONLY if original data had velocities
+        if parsed_data.get('velocities'):
              parsed_data['velocities'].extend(newly_placed_anchor_data_for_vel)
-             parsed_data['velocities'].sort(key=lambda x: x[0]) 
+
+        # FINAL GLOBAL RESEQUENCING: Wipes all gaps and ensures consecutive IDs for atoms, interactions, and velocities.
+        final_id_map = _resequence_atom_ids_and_update_parts(parsed_data['atoms'], parsed_data['atom_style_info'])
+        
+        for spec in interaction_specs:
+            key = spec['key']
+            if parsed_data.get(key):
+                _update_interaction_atom_ids(parsed_data[key], final_id_map, spec['atom_indices'])
+                _resequence_interaction_ids(parsed_data[key])
+
+        if parsed_data.get('velocities'):
+            parsed_data['velocities'] = _filter_and_resequence_velocities(
+                parsed_data['velocities'], set(), final_id_map
+            )
 
         final_header_counts = parsed_data['header_counts'].copy()
         final_header_counts['atoms'] = len(parsed_data['atoms'])
