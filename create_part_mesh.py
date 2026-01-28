@@ -26,6 +26,24 @@ import json
 
 
 # ==============================================================================
+# Logger Class
+# ==============================================================================
+class Tee(object):
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def __del__(self):
+        sys.stdout = self.stdout
+        self.file.close()
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
+# ==============================================================================
 # Parameter passing
 # ==============================================================================
 config_filename = None
@@ -38,6 +56,21 @@ if len(sys.argv) > 1:
             break
 
 # If no .json file was found in the arguments, fall back to searching the directory
+if config_filename is None:
+    json_files = glob.glob('*.json')
+    if json_files:
+        config_filename = json_files[0]
+
+if config_filename:
+    with open(config_filename, 'r') as f:
+        params = json.load(f)
+    
+    output_file_val = params.get('output_file')
+    if output_file_val and params.get('generate_logs', False):
+        log_filename = output_file_val.encode('utf-8') + "_genFE.log"
+        sys.stdout = Tee(log_filename, "w")
+
+# Re-read or use existing params for the rest of the script
 if config_filename is None:
     print "INFO: No .json config file found in arguments."
     print "      Searching for a .json file in the current directory..."
@@ -58,6 +91,8 @@ pbc_direction = params['pbc_direction']
 bridge_thickness = params['bridge_thickness']
 default_mesh_size = params['default_mesh_size']
 tol = params['tol']
+
+generate_logs = params.get('generate_logs', False)
 
 full_elem_bridge = params['full_elem_bridge']
 bridge_cellset = params['bridge_cellset']

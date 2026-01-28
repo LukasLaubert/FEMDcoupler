@@ -27,6 +27,8 @@ pbc_direction = params.get('pbc_direction')
 bridge_thickness = params['bridge_thickness']
 default_mesh_size = params['default_mesh_size']
 
+generate_logs = params.get('generate_logs', False)
+
 mesh_md_region = params['mesh_md_region']
 mesh_cutout_region = params['mesh_cutout_region']
 have_iface = params['have_iface']
@@ -34,7 +36,10 @@ have_padding = params['have_padding']
 tol = params['tol']
 
 dpd_thickness = params['dpd_thickness']
-anchor_placement_probability = params['anchor_placement_probability']
+anchor_eligible_types = params.get('anchor_eligible_types')
+anchor_placement_probability = params.get('anchor_placement_probability')
+if anchor_placement_probability is None:
+    anchor_placement_probability = 0.0
 anchor_symmetric_correction = params['anchor_symmetric_correction']
 ANCHOR_ATOM_MASS_VAL = params['ANCHOR_ATOM_MASS_VAL']
 truncate_chains = params['truncate_chains']
@@ -54,6 +59,33 @@ notch_depth = params['notch_depth']
 
 lammps_file = params['lammps_file']
 output_file = params['output_file']
+
+# ==============================================================================
+# Logger Class
+# ==============================================================================
+class Tee(object):
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def __del__(self):
+        sys.stdout = self.stdout
+        self.file.close()
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
+if generate_logs:
+    log_filename = output_file + "_genMD.log"
+    # Ensure directory exists if output_file has a path
+    log_dir = os.path.dirname(log_filename)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    sys.stdout = Tee(log_filename, "w")
+
 
 # ==============================================================================
 # find_lammps_data_file
@@ -97,7 +129,8 @@ def _determine_atom_style_info(atom_section_header_line):
 def _parse_atom_line(line_str, style_info):
     parts = line_str.split()
     try:
-        atom = {'id': int(parts[style_info['id_idx']]), 'type': int(parts[style_info['type_idx']]),
+        atom_type = int(parts[style_info['type_idx']])
+        atom = {'id': int(parts[style_info['id_idx']]), 'type': atom_type, 'initial_type': atom_type,
                 'x': float(parts[style_info['x_idx']]), 'y': float(parts[style_info['y_idx']]),
                 'z': float(parts[style_info['z_idx']]), 'original_parts': parts}
         if style_info['mol_id_idx'] is not None: atom['mol_id'] = int(parts[style_info['mol_id_idx']])
@@ -1108,36 +1141,76 @@ def run_anchor_cut_process():
         num_anchors_placed = 0
         newly_placed_anchor_data_for_vel = [] 
         
-        # Updated anchor placement logic, considering symmetry correction
-        for atom_obj in parsed_data['atoms']: 
-            if _is_atom_in_anchor_regions(atom_obj, anchor_regions, tol):
-                if random.random() < anchor_placement_probability:
-                    if num_anchors_placed == 0: 
-                        if original_declared_bond_types_count == 0:
-                            dynamic_new_bond_type_id_for_anchors = 1
-                        else:
-                            existing_bond_types = set()
-                            if parsed_data['bonds']: 
-                                for b_entry in parsed_data['bonds']: existing_bond_types.add(b_entry[1])
-                            
-                            dynamic_new_bond_type_id_for_anchors = original_declared_bond_types_count + 1
-                            while dynamic_new_bond_type_id_for_anchors in existing_bond_types:
-                                dynamic_new_bond_type_id_for_anchors +=1
-                    
-                    anchor_parts_list = _create_anchor_atom_parts(atom_obj, current_anchor_atom_id_counter, dynamic_anchor_atom_type_id, parsed_data['atom_style_info'])
-                    new_anchor_data = {
-                        'id': current_anchor_atom_id_counter, 'type': dynamic_anchor_atom_type_id,
-                        'x': atom_obj['x'], 'y': atom_obj['y'], 'z': atom_obj['z'],
-                        'original_parts': anchor_parts_list
-                    }
-                    if parsed_data['atom_style_info']['mol_id_idx'] is not None:
-                        new_anchor_data['mol_id'] = atom_obj.get('mol_id', 0)
-                    new_anchor_atom_objects_for_struct.append(new_anchor_data)
+        anchor_stats = {}
+        anchor_stats['All'] = {'total': 0, 'eligible': 0, 'placed': 0}
+        
+        active_sides_map = {}
+        for i in range(3):
+            active_sides_map[i] = {
+                'min': domain_min_coords[i] is not None,
+                'max': domain_max_coords[i] is not None
+            }
+            
+        for sx in [-1, 0, 1]:
+            for sy in [-1, 0, 1]:
+                for sz in [-1, 0, 1]:
+                    if sx == 0 and sy == 0 and sz == 0: continue
+                    anchor_stats[(sx, sy, sz)] = {'total': 0, 'eligible': 0, 'placed': 0}
 
-                    new_anchor_bonds_data_temp.append([dynamic_new_bond_type_id_for_anchors,
-                                                       atom_obj['id'], current_anchor_atom_id_counter])
-                    newly_placed_anchor_data_for_vel.append([current_anchor_atom_id_counter, 0, 0, 0])
-                    current_anchor_atom_id_counter += 1; num_anchors_placed += 1
+        eligible_set = set(anchor_eligible_types) if anchor_eligible_types is not None else None
+        
+        anchor_signature_map = [] 
+
+        for atom_obj in parsed_data['atoms']: 
+            coords = [atom_obj['x'], atom_obj['y'], atom_obj['z']]
+            sig = _get_atom_region_signature(coords, parsed_data['box_dims'], bridge_thickness, tol, active_sides_map)
+            
+            if sig != (0, 0, 0):
+                anchor_stats['All']['total'] += 1
+                anchor_stats[sig]['total'] += 1
+                
+                is_eligible = True
+                if eligible_set is not None:
+                    if atom_obj['initial_type'] not in eligible_set:
+                        is_eligible = False
+                
+                if is_eligible:
+                    anchor_stats['All']['eligible'] += 1
+                    anchor_stats[sig]['eligible'] += 1
+
+                    if random.random() < anchor_placement_probability:
+                        if num_anchors_placed == 0: 
+                            if original_declared_bond_types_count == 0:
+                                dynamic_new_bond_type_id_for_anchors = 1
+                            else:
+                                existing_bond_types = set()
+                                if parsed_data['bonds']: 
+                                    for b_entry in parsed_data['bonds']: existing_bond_types.add(b_entry[1])
+                                
+                                dynamic_new_bond_type_id_for_anchors = original_declared_bond_types_count + 1
+                                while dynamic_new_bond_type_id_for_anchors in existing_bond_types:
+                                    dynamic_new_bond_type_id_for_anchors +=1
+                        
+                        anchor_parts_list = _create_anchor_atom_parts(atom_obj, current_anchor_atom_id_counter, dynamic_anchor_atom_type_id, parsed_data['atom_style_info'])
+                        new_anchor_data = {
+                            'id': current_anchor_atom_id_counter, 'type': dynamic_anchor_atom_type_id,
+                            'x': atom_obj['x'], 'y': atom_obj['y'], 'z': atom_obj['z'],
+                            'original_parts': anchor_parts_list
+                        }
+                        if parsed_data['atom_style_info']['mol_id_idx'] is not None:
+                            new_anchor_data['mol_id'] = atom_obj.get('mol_id', 0)
+                        new_anchor_atom_objects_for_struct.append(new_anchor_data)
+
+                        new_anchor_bonds_data_temp.append([dynamic_new_bond_type_id_for_anchors,
+                                                           atom_obj['id'], current_anchor_atom_id_counter])
+                        newly_placed_anchor_data_for_vel.append([current_anchor_atom_id_counter, 0, 0, 0])
+                        
+                        anchor_signature_map.append(sig)
+
+                        anchor_stats['All']['placed'] += 1
+                        anchor_stats[sig]['placed'] += 1
+                            
+                        current_anchor_atom_id_counter += 1; num_anchors_placed += 1
         
         # ======================================================================
         # SYMMETRIC ANCHOR CORRECTION
@@ -1154,6 +1227,16 @@ def run_anchor_cut_process():
             )
             
             if indices_to_discard:
+                # Update stats by removing counts for discarded anchors
+                for idx in indices_to_discard:
+                    # Decrement All
+                    anchor_stats['All']['placed'] -= 1
+                    
+                    # Decrement specific region this anchor belonged to
+                    if idx < len(anchor_signature_map):
+                        sig_key = anchor_signature_map[idx]
+                        anchor_stats[sig_key]['placed'] -= 1
+
                 # Filter the lists based on indices
                 final_anchors = []
                 final_bonds = []
@@ -1235,6 +1318,58 @@ def run_anchor_cut_process():
                                     final_velocity_lines,
                                     final_header_counts, anchor_atom_type_for_mass_section)
 
+        # --- Anchor Statistics Reporting ---
+        print("\n" + "="*50)
+        if anchor_placement_probability > 0:
+            print(" ANCHOR DENSITY STATISTICS".center(50))
+        else:
+            print(" BRIDGE ATOM STATISTICS".center(50))
+        print("="*50)
+        
+        sorted_keys = sorted([k for k in anchor_stats.keys() if k != 'All'])
+        report_keys = sorted_keys + ['All']
+        
+        if anchor_placement_probability > 0:
+            headers = ["Bridge", "Total", "Eligible", "Placed", "%tot", "%elig"]
+        else:
+            headers = ["Bridge", "#atoms"]
+            
+        table_rows = []
+        
+        for r_name in report_keys:
+            s = anchor_stats[r_name]
+            tot = s['total']
+            
+            if tot == 0 and r_name != 'All':
+                continue
+                
+            display_name = str(r_name)
+            
+            if anchor_placement_probability > 0:
+                elig = s['eligible']
+                plac = s['placed']
+                perc_tot = "{:.2f}".format((float(plac) / tot * 100.0)) if tot > 0 else "0.00"
+                perc_elig = "{:.2f}".format((float(plac) / elig * 100.0)) if elig > 0 else "0.00"
+                table_rows.append([display_name, str(tot), str(elig), str(plac), perc_tot, perc_elig])
+            else:
+                table_rows.append([display_name, str(tot)])
+            
+        col_widths = [len(h) for h in headers]
+        for row in table_rows:
+            for i, val in enumerate(row):
+                if len(val) > col_widths[i]:
+                    col_widths[i] = len(val)
+        
+        fmt_str = " | ".join(["{:<" + str(w) + "}" for w in col_widths])
+        
+        print(fmt_str.format(*headers))
+        print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+        
+        for row in table_rows:
+            print(fmt_str.format(*row))
+            
+        print("="*50 + "\n")
+
         if num_anchors_placed > 0:
             print("Placed {} anchor atoms (type {}) and {} anchor bonds (type {}).".format(
                 num_anchors_placed, dynamic_anchor_atom_type_id,
@@ -1255,6 +1390,15 @@ def run_anchor_cut_process():
         traceback.print_exc()
     finally:
         print("="*70)
+        # Restore original stdout to stop logging the input prompt
+        if hasattr(sys.stdout, 'file'): # Check if it is a Tee object
+             # Get the original stdout from the Tee object if possible, 
+             # or implicitly let the interpreter cleanup.
+             # Better: explicitly close the file and restore.
+             tee_obj = sys.stdout
+             sys.stdout = tee_obj.stdout
+             tee_obj.file.close()
+        
         input("Process complete. Press Enter to close this window...")
 
 # ==============================================================================

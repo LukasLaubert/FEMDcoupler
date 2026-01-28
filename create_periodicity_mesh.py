@@ -15,6 +15,24 @@ from collections import Counter
 import json
 import glob
 
+# ==============================================================================
+# Logger Class
+# ==============================================================================
+class Tee(object):
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def __del__(self):
+        sys.stdout = self.stdout
+        self.file.close()
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
 def parse_parameters():
     """Parse parameters from a .json file specified by argument or found in the path."""
     config_filename = None
@@ -544,6 +562,25 @@ def main():
     print("="*60)
 
 if __name__ == "__main__":
+    try:
+        config_file_init = None
+        if len(sys.argv) > 1 and '.json' in sys.argv[1]:
+            config_file_init = sys.argv[1]
+        else:
+            json_files = glob.glob('*.json')
+            if json_files:
+                config_file_init = json_files[0]
+
+        if config_file_init:
+            with open(config_file_init, 'r') as f:
+                params_init = json.load(f)
+                if params_init.get('generate_logs', False):
+                    output_file_init = params_init.get('output_file')
+                    if output_file_init:
+                        sys.stdout = Tee(output_file_init + "_genFE.log", "a")
+    except:
+        pass
+
     print("\nCleaning up temporary Abaqus files...")
     params = parse_parameters()
     output_dir = os.path.dirname(params.get('output_file', ''))

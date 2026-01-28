@@ -5,6 +5,24 @@ import re
 from collections import OrderedDict
 import glob
 
+# ==============================================================================
+# Logger Class
+# ==============================================================================
+class Tee(object):
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def __del__(self):
+        sys.stdout = self.stdout
+        self.file.close()
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
 # --- Data Structures for LAMMPS File ---
 class AtomStyleInfo:
     def __init__(self, style_name, id_idx, mol_id_idx, type_idx, q_idx, x_idx, y_idx, z_idx):
@@ -276,6 +294,7 @@ def run_femd_merger():
     try:
         if len(sys.argv) > 1:
             with open(sys.argv[1], 'r') as f: params = json.load(f)
+            
             datafile_path = os.path.splitext(params['output_file'])[0] + '.data'
             inpfile_path = os.path.splitext(params['output_file'])[0] + '.inp'
             cellset_names = ["FE", "BD"] if params['bridge_cellset'] else ["FE"]
@@ -346,4 +365,23 @@ def run_femd_merger():
         print("="*70)
 
 if __name__ == "__main__":
+    try:
+        config_file_init = None
+        if len(sys.argv) > 1 and '.json' in sys.argv[1]:
+            config_file_init = sys.argv[1]
+        else:
+            json_files = glob.glob('*.json')
+            if json_files:
+                config_file_init = json_files[0]
+        
+        if config_file_init:
+            with open(config_file_init, 'r') as f:
+                params_init = json.load(f)
+                if params_init.get('generate_logs', False):
+                    output_file_init = params_init.get('output_file')
+                    if output_file_init:
+                        sys.stdout = Tee(output_file_init + "_genFE.log", "a")
+    except:
+        pass
+        
     run_femd_merger()
