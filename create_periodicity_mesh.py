@@ -158,7 +158,7 @@ def parse_inp_file(file_path):
 
 def pre_correct_boun_nodes(nodes_dict, nsets):
     """Adjusts nodes in BOUN sets to be perfectly aligned on their respective planes."""
-    print("\nPre-correcting BOUN node sets for perfect alignment:")
+    print("Pre-correcting BOUN node sets for perfect alignment:")
     axis_map = {'x': 0, 'y': 1, 'z': 2}
     for nset_name, node_ids in nsets.items():
         if not node_ids or not nset_name.startswith('BOUN_'):
@@ -223,34 +223,60 @@ def calculate_typical_nodal_distance(nodes_dict, direction):
     else:
         return (differences[median_index - 1] + differences[median_index]) / 2
 
-def get_boundary_node_count(nodes_dict, direction, nsets):
-    """Get number of unique boundary node positions for validation using BOUN_...lo Nset."""
-    # Determine non-processing indices
+def get_boundary_node_count(nodes_dict, direction, tol, nsets):
+    """
+    Get number of unique boundary node positions.
+    Checks both BOUN node sets and geometric extrema to account for cases where BOUN sets might not cover the full periodic cross-section (e.g. padding).
+    """
+    # Determine non-processing indices and axis
     if direction == 1:
         non_processing_indices = [1, 2]  # y, z
+        axis_idx = 0
+        axis_char = 'x'
     elif direction == 2:
         non_processing_indices = [0, 2]  # x, z
+        axis_idx = 1
+        axis_char = 'y'
     else:
         non_processing_indices = [0, 1]  # x, y
+        axis_idx = 2
+        axis_char = 'z'
         
-    axis_char = ['x', 'y', 'z'][direction-1]
+    # --- Method 1: BOUN Set ---
+    boun_count = 0
+    boun_positions = set()
     nset_name = f'BOUN_{axis_char}lo'
     
-    if nset_name not in nsets:
-        print(f"Error: Required node set '{nset_name}' not found in .inp file.")
-        sys.exit(1)
-
-    boundary_node_ids = nsets[nset_name]
+    if nset_name in nsets:
+        boundary_node_ids = nsets[nset_name]
+        for node_id in boundary_node_ids:
+            if node_id in nodes_dict:
+                coords = nodes_dict[node_id]
+                boundary_pos = tuple(coords[i] for i in non_processing_indices)
+                boun_positions.add(boundary_pos)
+        boun_count = len(boun_positions)
     
-    # Find unique boundary positions from the specified Nset
-    boundary_positions = set()
-    for node_id in boundary_node_ids:
-        if node_id in nodes_dict:
-            coords = nodes_dict[node_id]
-            boundary_pos = tuple(coords[i] for i in non_processing_indices)
-            boundary_positions.add(boundary_pos)
+    # --- Method 2: Geometric Search ---
+    all_coords_in_dir = [coords[axis_idx] for coords in nodes_dict.values()]
+    if not all_coords_in_dir:
+        return 0, set()
+        
+    min_val = min(all_coords_in_dir)
+    geo_positions = set()
+    selection_tol = max(tol * 10, 1e-4) 
     
-    return len(boundary_positions), boundary_positions
+    for node_id, coords in nodes_dict.items():
+        if abs(coords[axis_idx] - min_val) < selection_tol:
+            pos = tuple(coords[i] for i in non_processing_indices)
+            geo_positions.add(pos)
+            
+    geo_count = len(geo_positions)
+    
+    # --- Decision ---
+    if geo_count > boun_count:
+        print(f"  Geometric boundary node count ({geo_count}) > BOUN node count ({boun_count}). Using geometric.")
+        return geo_count, geo_positions
+    return boun_count, boun_positions
 
 def _create_groups_with_tolerance(coord_combinations, tolerance):
     """Create groups of nodes within tolerance."""
@@ -279,10 +305,11 @@ def _create_groups_with_tolerance(coord_combinations, tolerance):
     
     return groups
 
-def group_nodes_by_direction(nodes_dict, direction, tol, nsets):
+def group_nodes_by_direction(nodes_dict, direction, tol, max_tol, nsets):
     """Group nodes with adaptive tolerance search."""
-    target_group_count, _ = get_boundary_node_count(nodes_dict, direction, nsets)
-    
+    target_group_count, _ = get_boundary_node_count(nodes_dict, direction, tol, nsets)
+    print(f"  Target: {target_group_count}, Limit: {max_tol:.2e}")
+
     # Determine coordinate indices
     if direction == 1:
         coord_indices = [1, 2]
@@ -311,6 +338,10 @@ def group_nodes_by_direction(nodes_dict, direction, tol, nsets):
     while iteration < max_iterations:
         iteration += 1
         
+        if current_tolerance > max_tol:
+            current_tolerance = max_tol
+            print(f"  Capping tolerance at limit: {max_tol:.2e}")
+
         groups = _create_groups_with_tolerance(coord_combinations, current_tolerance)
         group_count = len(groups)
         diff = abs(group_count - target_group_count)
@@ -324,6 +355,10 @@ def group_nodes_by_direction(nodes_dict, direction, tol, nsets):
         if diff < best_diff or (diff == best_diff and current_tolerance > best_tolerance):
             best_diff, best_groups, best_tolerance = diff, groups, current_tolerance
         
+        if current_tolerance >= max_tol and group_count > target_group_count:
+             print("  Warning: Reached max tolerance limit without matching target group count.")
+             break
+
         if diff <= 1 and iteration > 10:
             best_groups, best_tolerance = groups, current_tolerance
             break
@@ -343,7 +378,11 @@ def group_nodes_by_direction(nodes_dict, direction, tol, nsets):
             tolerance_factor /= adjustment_factor
         
         current_tolerance = tol * tolerance_factor
-    
+        
+        if current_tolerance > max_tol and abs(best_tolerance - max_tol) < 1e-12:
+             current_tolerance = max_tol 
+             if iteration > 1: pass 
+
     return best_groups, best_tolerance
 
 def adjust_node_coordinates(nodes_dict, groups, direction, tolerance):
@@ -422,7 +461,7 @@ def validate_periodicity(nodes_dict, direction, tolerance, nsets):
             break
     
     # Get boundary node count for comparison
-    boundary_count, _ = get_boundary_node_count(nodes_dict, direction, nsets)
+    boundary_count, _ = get_boundary_node_count(nodes_dict, direction, tolerance, nsets)
     
     is_valid = (len(position_groups) == boundary_count) and all_identical
     
@@ -474,7 +513,7 @@ def write_output_file(file_structure, nodes_dict, node_formats, output_file):
                                 
                                 # Build the line with proper spacing and commas
                                 new_line = (fmt['leading_spaces'] + f"{node_id}," + fmt['after_node_id'] + x_str + "," +
-                                          fmt['after_x'] + y_str + "," + fmt['after_y'] + z_str + '\n')
+                                    fmt['after_x'] + y_str + "," + fmt['after_y'] + z_str + '\n')
                                 
                                 f.write(new_line)
                             else:
@@ -508,7 +547,7 @@ def main():
     
     # Find and parse input file
     inp_file, message = find_inp_file(params)
-    print(f"\nInput file: {message}")
+    print(f"Input file: {message}")
     
     nodes_dict, file_structure, node_formats, nsets = parse_inp_file(inp_file)
     print(f"Nodes found: {len(nodes_dict)}")
@@ -520,7 +559,14 @@ def main():
     # Determine processing directions
     processing_directions = get_processing_directions(params)
     dir_names = [['X', 'Y', 'Z'][d-1] for d in processing_directions]
-    print(f"\nProcessing directions: {', '.join(dir_names)}")
+    print(f"Processing directions: {', '.join(dir_names)}")
+    
+    # Determine max tolerance
+    default_mesh_size = params['default_mesh_size']
+    bridge_thickness = params['bridge_thickness']
+    limit_dim = min(default_mesh_size, bridge_thickness) if bridge_thickness else default_mesh_size # Also takes care of case where bridge_thickness is None/0 in params
+    max_tol = limit_dim * 0.45
+    print(f"Max tolerance limit: {max_tol:.4f} (from mesh/bridge)")
     
     # Process each direction
     updated_nodes = nodes_dict.copy()
@@ -533,7 +579,7 @@ def main():
         
         # Group nodes with adaptive tolerance
         print("Adaptive tolerance search:")
-        groups, adaptive_tolerance = group_nodes_by_direction(updated_nodes, direction, params.get('tol', 1e-6), nsets)
+        groups, adaptive_tolerance = group_nodes_by_direction(updated_nodes, direction, params.get('tol', 1e-6), max_tol, nsets)
         print(f"Final: tol={adaptive_tolerance:.2e}, groups={len(groups)}")
         
         # Adjust coordinates
@@ -555,7 +601,7 @@ def main():
     # Summary
     print(f"\n{'='*60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{('='*60)}")
     print(f"Total nodes: {len(nodes_dict)}")
     print(f"Total adjustments: {total_adjustments}")
     print(f"Output file: {output_file}")
@@ -581,7 +627,7 @@ if __name__ == "__main__":
     except:
         pass
 
-    print("\nCleaning up temporary Abaqus files...")
+    print("\nCleaning up temporary Abaqus files...\n")
     params = parse_parameters()
     output_dir = os.path.dirname(params.get('output_file', ''))
 
