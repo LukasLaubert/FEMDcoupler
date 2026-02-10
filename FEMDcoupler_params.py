@@ -12,6 +12,7 @@ class ParamConfig:
     output_file = "../silica_burrito/silica_q026_100x100x50_bur1"  # file name of the output files excluding file extension with (optional) output path
     generate_logs = True            # if True, creates separate log files for FE and MD generation (<output_file>_genFE.log and <output_file>_genMD.log)
     extra_setup_folder = True       # if True, moves logs, setup files, & preview/FE-MD-merged files to a separate folder "<output_file>.setup" after the coupling process
+    skip_abaqus_GUI = True          # if True, generates the mesh without starting the Abaqus CAE GUI (executes in nogui mode). This is significantly faster and recommended especially on Linux computers, where automatic script execution fails (see README.md) when no mesh and set adaptations are required    
 
     # --- FE GEOMETRY PARAMETERS ---
     # (a) Rectangular FE systam: set 'circular_burrito_radius = None' below to use
@@ -20,14 +21,13 @@ class ParamConfig:
     # (b) Circular FE system
     circular_burrito_radius = None # radius of a circular burrito system from MD center | !!overwrites '(a) rectuangular FE system' if not None!!
     pbc_direction = 2              # direction of periodic boundary conditions; 1: x, 2: y, 3: z
-    
 
     # --- FE REGION & PARTITION PARAMETERS ---
     bridge_thickness = 12          # FE extends this much into MD box, creating the BD
     default_mesh_size = 10         # default mesh size, which is automatically adapted to match the domain sizes well
 #    mesh_coarsening_factor = 3    # coarsens mesh with values >1 by the factor given up to the outermost border; refines mesh with 0<values<1; disable with None or 0 or 1 # NOT IMPLEMENTED
     tol = 1e-6
-
+    
     full_elem_bridge = True        # if True, FE elements are always fully covered with MD particles in the BD (mesh size for BD is seperately calculated from rest of FE); if False, MD can also extend into only parts of FE elements (BD mesh size is calculated together with rest of FE)
     bridge_cellset = True          # if True, BD is a seperate cell set; if False, BD is part of the FE cell set (and no separate BD cellset is created)
     have_padding = False           # if True, creates a padding layer of FE elements whereever there is no FE(/BD) layer (i.e. where we have PBCs in the MD system)

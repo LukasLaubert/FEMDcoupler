@@ -29,9 +29,9 @@ import json
 # Logger Class
 # ==============================================================================
 class Tee(object):
-    def __init__(self, name, mode):
+    def __init__(self, name, mode, use_nogui=False):
         self.file = open(name, mode)
-        self.stdout = sys.stdout
+        self.stdout = sys.__stdout__ if use_nogui else sys.stdout
         sys.stdout = self
     def __del__(self):
         sys.stdout = self.stdout
@@ -68,7 +68,7 @@ if config_filename:
     output_file_val = params.get('output_file')
     if output_file_val and params.get('generate_logs', False):
         log_filename = output_file_val.encode('utf-8') + "_genFE.log"
-        sys.stdout = Tee(log_filename, "w")
+        sys.stdout = Tee(log_filename, "w", params.get('skip_abaqus_GUI', False))
 
 # Re-read or use existing params for the rest of the script
 if config_filename is None:

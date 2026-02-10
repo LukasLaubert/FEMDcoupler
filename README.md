@@ -70,8 +70,8 @@ Running these scripts will initiate the full pre-processing pipeline, culminatin
 - **Running Scripts Individually**: All Python scripts can be run independently. For a full process, simply follow the execution order stated under "Workflow Overview" below, which is also executed by the `.bat` or `.sh` files.
 
 - **Abaqus GUI Interaction**:
-    - When the `create_part_mesh.py` script is executed, it will launch Abaqus/CAE. You can make arbitrary changes to the model within the GUI at this stage.
-    - **Note for Linux Users**: In some Linux environments, the script might not execute automatically once the GUI opens. If the model is not generated automatically, inside Abaqus go to `File > Run Script...` and select `create_part_mesh.py` manually.
+    - When the `create_part_mesh.py` script is executed, it will launch Abaqus/CAE unless `skip_abaqus_GUI` is set to `True` in `FEMDcoupler_params.py`. You can make arbitrary changes to the model within the GUI at this stage.
+    - **Note for Linux Users**: In some Linux environments, the script might not execute automatically once the GUI opens. If the model is not generated automatically, inside Abaqus go to `File > Run Script...` and select `create_part_mesh.py` manually. To avoid this and graphics driver issues, it is highly recommended to use the **Headless Mode** (see below).
     - To ensure your changes are recognized by subsequently executed scripts, you must save the model by overwriting the already generated `.inp` file. To do so, expand `Jobs` in the `Analysis` section on the Model Worktree (click `+` left of it) > right click the only existing job listed there > `Write Input` > `OK` > `Yes`.
     - If no changes are made, saving is not required, as the script handles file generation automatically. Abaqus may be closed without saving.
 
@@ -82,7 +82,7 @@ Running these scripts will initiate the full pre-processing pipeline, culminatin
 
 - **Common Linux Issues**:
     - **X2Go Rendering Issues**: If running Abaqus/CAE via a remote desktop solution like X2Go, you may encounter rendering problems. To resolve this, add the ` -mesa` flag after `abaqus cae` in the `FEMDcoupler_run.sh` for starting Abaqus.
-    - **Headless Mode (recommended)**: To prevent the Abaqus GUI from starting altogether (e.g. to avoid graphics driver issues), you can modify the run script `FEMDcoupler_run.sh` as follows: After the `abaqus cae` command, replace `script=` with `noGUI=`. This is significantly faster and **ensures the script executes automatically**, whereas the GUI mode (`script=`) on Linux often requires triggering the script manually (see section **Abaqus GUI Interaction**). However, this removes the ability to interactively modify the FE model within the scope of the automated workflow. If the FE model/.inp file is modified later using Abaqus, please see section **Subsequent overwriting of .inp file and using periodic Dirichlet boundary conditions**.
+    - **Headless Mode (highly recommended)**: To prevent the Abaqus GUI from starting altogether (e.g., to avoid graphics driver issues), set `skip_abaqus_GUI = True` in `FEMDcoupler_params.py`. This is significantly faster and **ensures the script executes automatically**, whereas the GUI mode on Linux often requires manual triggering (see section **Abaqus GUI Interaction**). However, this removes the ability to interactively modify the FE model within the scope of the automated workflow. If the FE model/.inp file is modified later using Abaqus, please see section **Subsequent overwriting of .inp file and using periodic Dirichlet boundary conditions**.
 
 ## Workflow Overview
 
