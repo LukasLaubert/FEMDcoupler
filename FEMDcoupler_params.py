@@ -8,9 +8,10 @@ class ParamConfig:
     # BD: Bridging Domain      -> The transition/overlap region between FE and MD
     
     # --- PATH & FILE HANDLING ----
-    lammps_file = "../equilSystems/silica_quench026_100x100x50_1.data"  # specify a file name with (optional) a path; if "None" (without ""), uses first file with ".data" extension in current path
-    output_file = "../silica_q026_100x100x50_bur1"  # file name of the output files excluding file extension with (optional) output path
+    lammps_file = "../equilSystems/silica_quench026_100x100x50_5.data"  # specify a file name with (optional) a path; if "None" (without ""), uses first file with ".data" extension in current path
+    output_file = "../silica_burrito/silica_q026_100x100x50_bur1"  # file name of the output files excluding file extension with (optional) output path
     generate_logs = True            # if True, creates separate log files for FE and MD generation (<output_file>_genFE.log and <output_file>_genMD.log)
+    extra_setup_folder = True       # if True, moves logs, setup files, & preview/FE-MD-merged files to a separate folder "<output_file>.setup" after the coupling process
 
     # --- FE GEOMETRY PARAMETERS ---
     # (a) Rectangular FE systam: set 'circular_burrito_radius = None' below to use
@@ -88,4 +89,10 @@ def create_json_config():
     print(json_filename)
 
 if __name__ == "__main__":
+    # Ensure output directory exists
+    output_dir = os.path.dirname(ParamConfig.output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print("Created output directory: {}".format(output_dir))
+
     create_json_config()

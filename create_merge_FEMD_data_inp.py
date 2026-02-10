@@ -4,6 +4,7 @@ import json
 import re
 from collections import OrderedDict
 import glob
+import shutil
 
 # ==============================================================================
 # Logger Class
@@ -385,3 +386,51 @@ if __name__ == "__main__":
         pass
         
     run_femd_merger()
+
+    # --- Extra Setup Folder Handling ---
+    try:
+        if config_file_init:
+            with open(config_file_init, 'r') as f:
+                params_final = json.load(f)
+            
+            if params_final.get('extra_setup_folder', False):
+                output_base = os.path.splitext(params_final['output_file'])[0]
+                setup_dir = output_base + ".setup"
+                
+                if not os.path.exists(setup_dir):
+                    os.makedirs(setup_dir)
+                
+                # Close logger to release files
+                if isinstance(sys.stdout, Tee):
+                    log_file_path = sys.stdout.file.name
+                    sys.stdout.file.close()
+                    sys.stdout = sys.stdout.stdout
+                else:
+                    log_file_path = None
+
+                print("\nOrganizing setup files into: {}".format(setup_dir))
+                
+                # Files to move: .json, merged .data, .cae, and logs
+                # Note: original .inp and unmerged .data stay in the main folder
+                files_to_move = [
+                    config_file_init,
+                    output_base + "_FEMD_merged.data",
+                    output_base + ".cae" # Abaqus project file
+                ]
+                
+                # Add logs
+                if params_final.get('generate_logs', False):
+                    files_to_move.append(output_base + "_genFE.log")
+                    files_to_move.append(output_base + "_genMD.log")
+
+                for fpath in files_to_move:
+                    if fpath and os.path.exists(fpath):
+                        try:
+                            # Use shutil.move to handle cross-device moves if necessary
+                            shutil.move(fpath, os.path.join(setup_dir, os.path.basename(fpath)))
+                        except Exception as e:
+                            print("  Warning: Could not move {}: {}".format(fpath, e))
+
+                print("Setup files moved successfully.")
+    except Exception as e:
+        print("\nWarning: Extra setup folder organization failed: {}".format(e))
